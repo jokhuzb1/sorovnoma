@@ -345,7 +345,7 @@ bot.onText(/\/newpoll/, (msg) => {
         return bot.sendMessage(chatId, '❌ Sizda bu buyruqni ishlatish huquqi yoq.');
     }
 
-    const webAppUrl = 'https://8f190c100bc6.ngrok-free.app';
+    const webAppUrl = 'https://sorovnoma.duckdns.org';
 
     bot.sendMessage(chatId, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nQuyidagi tugmani bosib, sorovnoma yaratish oynasini oching:', {
         parse_mode: 'HTML',
