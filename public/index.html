@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="uz">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -8,6 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
+
 <body class="dark-mode">
     <div class="container">
         <!-- Header -->
@@ -29,7 +31,8 @@
             <!-- Question -->
             <div class="input-group">
                 <label>Sorovnoma matni</label>
-                <textarea id="question" name="question" placeholder="Savolingizni yozing..." required rows="3"></textarea>
+                <textarea id="question" name="question" placeholder="Savolingizni yozing..." required
+                    rows="3"></textarea>
             </div>
 
             <!-- Options -->
@@ -49,7 +52,7 @@
             <!-- Settings -->
             <div class="card settings-card">
                 <h3>Sozlamalar</h3>
-                
+
                 <div class="toggle-row">
                     <span>Ko'p tanlov (Multiple choice)</span>
                     <label class="switch">
@@ -70,7 +73,7 @@
             <!-- Date & Time -->
             <div class="card settings-card">
                 <h3>Vaqt Cheklovlari (Ixtiyoriy)</h3>
-                
+
                 <div class="input-group">
                     <label>Boshlanish vaqti</label>
                     <input type="datetime-local" name="start_time" id="startTime">
@@ -82,8 +85,8 @@
                 </div>
             </div>
 
-             <!-- Channels -->
-             <div class="input-group">
+            <!-- Channels -->
+            <div class="input-group">
                 <label>Majburiy Kanallar</label>
                 <input type="text" id="channels" name="channels" placeholder="@kanal1, @kanal2 (vergul bilan)">
                 <small>Bot bu kanallarda admin bo'lishi shart!</small>
@@ -91,7 +94,7 @@
 
         </form>
     </div>
-    
+
     <!-- Floating Action Button -->
     <div class="fab-container">
         <button type="button" id="submitBtn" class="btn-primary">Yaratish</button>
@@ -99,7 +102,7 @@
 
     <div id="loader" class="loader hidden"></div>
 
-    <script src="js/debug.js"></script>
     <script src="js/app.js"></script>
 </body>
+
 </html>

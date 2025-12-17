@@ -83,7 +83,3 @@ submitBtn.addEventListener('click', async () => {
         submitBtn.innerText = 'Yaratish';
     }
 });
-
-// Set Main Button (Optional - using custom button instead for more control)
-// tg.MainButton.setText("YARATISH").show();
-// tg.MainButton.onClick(() => submitBtn.click());
