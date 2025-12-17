@@ -236,7 +236,7 @@ bot.on('message', (msg) => {
     if (msg.text === '📝 Yangi Sorovnoma') {
         if (!isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, '⛔ You are not authorized.');
 
-        const webAppUrl = 'https://sorovnoma.duckdns.org';
+        const webAppUrl = 'https://sorovnoma.freeddns.org';
         bot.sendMessage(msg.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nQuyidagi tugmani bosib, sorovnoma yaratish oynasini oching:', {
             parse_mode: 'HTML',
             reply_markup: {
@@ -345,7 +345,7 @@ bot.onText(/\/newpoll/, (msg) => {
         return bot.sendMessage(chatId, '❌ Sizda bu buyruqni ishlatish huquqi yoq.');
     }
 
-    const webAppUrl = 'https://sorovnoma.duckdns.org';
+    const webAppUrl = 'https://sorovnoma.freeddns.org';
 
     bot.sendMessage(chatId, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nQuyidagi tugmani bosib, sorovnoma yaratish oynasini oching:', {
         parse_mode: 'HTML',
