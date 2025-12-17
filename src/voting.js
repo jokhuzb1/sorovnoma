@@ -88,8 +88,11 @@ function generatePollContent(pollId) {
         callback_data: `vote:${pollId}:${opt.id}`
     }]);
 
-    // Add Share Button
-    inline_keyboard.push([{ text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` }]);
+    // Add Share Button AND Refresh Button
+    inline_keyboard.push([
+        { text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` },
+        { text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }
+    ]);
 
     return { caption, reply_markup: { inline_keyboard }, poll };
 }
@@ -129,9 +132,15 @@ async function handleVote(bot, query, botUsername) {
     const { id, data, message, from, inline_message_id } = query;
     const userId = from.id;
 
-    // 1. INSTANT FEEDBACK (Stop Spinner immediately)
     try {
         const [type, pollId, optionId] = data.split(':');
+
+        // HANDLE REFRESH
+        if (type === 'refresh') {
+            await updatePollMessage(bot, message?.chat?.id, message?.message_id, pollId, inline_message_id);
+            return bot.answerCallbackQuery(id, { text: 'Yangilandi! 🔄' });
+        }
+
         if (type !== 'vote') return bot.answerCallbackQuery(id); // Just close for non-votes
 
         // Input Debouncing
