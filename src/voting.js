@@ -1,28 +1,63 @@
-
 const db = require('./database');
 
+// --- CACHE SETUP ---
+const membershipCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 Minutes
+
+function getCachedMembership(userId, channel) {
+    const key = `${userId}:${channel}`;
+    const cached = membershipCache.get(key);
+    if (cached && Date.now() < cached.expiry) {
+        return cached.isMember;
+    }
+    return null;
+}
+
+function setCachedMembership(userId, channel, isMember) {
+    const key = `${userId}:${channel}`;
+    membershipCache.set(key, { isMember, expiry: Date.now() + CACHE_TTL });
+}
+
+// Cleanup Cache periodically (every 10 mins)
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of membershipCache.entries()) {
+        if (now > value.expiry) membershipCache.delete(key);
+    }
+}, 10 * 60 * 1000);
+// -------------------
+
 async function checkChannelMembership(bot, userId, requiredChannels) {
-    // Parallel Execution for Speed
+    // Parallel Execution with Caching
     const results = await Promise.all(requiredChannels.map(async (channel) => {
+        // 1. Check Cache
+        const cached = getCachedMembership(userId, channel);
+        if (cached !== null) {
+            return cached ? null : channel; // If member, return null (success), else return channel (missing)
+        }
+
+        // 2. Fetch from API
         try {
             const member = await bot.getChatMember(channel, userId);
-            if (!['creator', 'administrator', 'member'].includes(member.status)) {
-                return channel;
-            }
+            const isMember = ['creator', 'administrator', 'member'].includes(member.status);
+
+            // Update Cache
+            setCachedMembership(userId, channel, isMember);
+
+            if (!isMember) return channel;
         } catch (error) {
             console.error(`Error checking membership for ${channel}: `, error.message);
-            // If checking fails (e.g. bot not admin), treat as missing to be safe/strict
-            // or maybe ignore? Let's treat as missing to prompt user.
+            // On error (e.g. bot kicked), treat as NOT member to be safe
             return channel;
         }
         return null; // Is member
     }));
 
-    // Filter out nulls
+    // Filter out nulls (meaning they ARE members) to leave only MISSING channels
     return results.filter(c => c !== null);
 }
 
-// Helper to generate Poll UI (Caption & Keyboard)
+// Helper to generate Poll UI
 function generatePollContent(pollId) {
     const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
     if (!poll) return null;
@@ -33,7 +68,6 @@ function generatePollContent(pollId) {
     const totalVotes = db.prepare('SELECT COUNT(DISTINCT user_id) as count FROM votes WHERE poll_id = ?').get(pollId).count;
 
     const voteCounts = db.prepare('SELECT option_id, COUNT(*) as count FROM votes WHERE poll_id = ? GROUP BY option_id').all(pollId);
-    console.log(`[DEBUG] Poll ${pollId} counts:`, voteCounts);
     const countsMap = {};
     voteCounts.forEach(row => countsMap[row.option_id] = row.count);
 
@@ -60,19 +94,32 @@ function generatePollContent(pollId) {
 
 const updateQueue = new Map();
 
-// Process Queue every 2 seconds
+// Process Queue every 1.5 seconds (Faster updates)
 setInterval(async () => {
     if (updateQueue.size === 0) return;
 
+    // Snapshot current updates and clear queue immediately to allow new ones
     const updates = Array.from(updateQueue.values());
     updateQueue.clear();
 
-    console.log(`[BATCH] Processing ${updates.length} UI updates...`);
+    // console.log(`[BATCH] Processing ${updates.length} UI updates...`);
 
-    for (const update of updates) {
-        await updatePollMessage(update.bot, update.chatId, update.messageId, update.pollId, update.inlineMessageId);
+    // Process in chunks to avoid hitting Telegram burst limits too hard, but faster than serial
+    // Telegram generally allows ~30 msgs/sec broad broadcast, but editing same message is limited.
+    // Since these are likely DIFFERENT messages (different users/chats), safe to parallelism.
+
+    // We'll limit concurrency to 5 at a time
+    const chunk = (arr, size) => Array.from({ length: Math.ceil(arr.length / size) }, (v, i) => arr.slice(i * size, i * size + size));
+    const batches = chunk(updates, 5);
+
+    for (const batch of batches) {
+        await Promise.all(batch.map(u =>
+            updatePollMessage(u.bot, u.chatId, u.messageId, u.pollId, u.inlineMessageId)
+                .catch(e => console.error('Update Failed:', e.message))
+        ));
     }
-}, 2000);
+
+}, 1500);
 
 const processingCache = new Set();
 
@@ -80,19 +127,16 @@ async function handleVote(bot, query, botUsername) {
     const { id, data, message, from, inline_message_id } = query;
     const userId = from.id;
 
-    // Input Debouncing: Ignore clicks from same user on same data within 1 second
+    // Input Debouncing: Ignore clicks from same user on same data within 0.5 second (Snappier)
     const uniqueKey = `${userId}:${data}`;
     if (processingCache.has(uniqueKey)) {
-        return bot.answerCallbackQuery(id); // Silent ignore
+        return bot.answerCallbackQuery(id);
     }
     processingCache.add(uniqueKey);
-    setTimeout(() => processingCache.delete(uniqueKey), 1000);
-
-    // console.log(`[VOTE] User ${userId} clicked: ${data}`); // Reduced log spam
+    setTimeout(() => processingCache.delete(uniqueKey), 500);
 
     try {
         const [type, pollId, optionId] = data.split(':');
-
         if (type !== 'vote') return;
 
         const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
@@ -101,14 +145,19 @@ async function handleVote(bot, query, botUsername) {
         const settings = JSON.parse(poll.settings_json || '{}');
         const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
 
-        // Gatekeeping with Redirect
+        // Gatekeeping Check
         if (requiredChannels.length > 0) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
             if (!SUPER_ADMINS.includes(userId)) {
+                // Use Cache Aware Check
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
+
                 if (missing.length > 0) {
+                    // Check if this is a "deep link" check via start param, or direct click
+                    // If direct click, show alert
                     if (botUsername) {
+                        // Redirect logic
                         return bot.answerCallbackQuery(id, {
                             url: `https://t.me/${botUsername}?start=verify_${pollId}`,
                             cache_time: 0
@@ -139,31 +188,32 @@ async function handleVote(bot, query, botUsername) {
         const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
         const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
 
-        let successMessage = 'Ovoz berildi!';
+        let successMessage = 'Ovoz qabul qilindi';
 
         if (existingVote) {
             if (settings.allow_edit || settings.multiple_choice) {
                 db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
-                successMessage = 'Ovoz olib tashlandi.';
+                successMessage = 'Ovoz olib tashlandi ↩️';
             } else {
                 return bot.answerCallbackQuery(id, { text: 'Ovozni ozgartira olmaysiz.' });
             }
         } else {
             if (!settings.multiple_choice && userVotes.length > 0) {
                 if (settings.allow_edit) {
-                    const deleteStmt = db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?');
-                    deleteStmt.run(pollId, userId);
+                    // Switch vote: Delete old ones
+                    db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
+                    successMessage = 'Ovoz ozgartirildi 🔄';
                 } else {
-                    return bot.answerCallbackQuery(id, { text: 'Kop tanlov ochirilgan.' });
+                    return bot.answerCallbackQuery(id, { text: 'Faqat bitta variant tanlash mumkin.' });
                 }
             }
             db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
         }
 
-        // Optimistic UI Feedback (Immediate Toast)
+        // Immediate Toast Feedback
         await bot.answerCallbackQuery(id, { text: successMessage });
 
-        // Queue UI Update (Batching)
+        // Queue UI Update
         const chatId = message ? message.chat.id : null;
         const messageId = message ? message.message_id : null;
         const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
@@ -174,9 +224,7 @@ async function handleVote(bot, query, botUsername) {
 
     } catch (error) {
         console.error('Vote Error:', error);
-        try {
-            bot.answerCallbackQuery(id, { text: 'Error!' });
-        } catch (e) { }
+        try { bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi' }); } catch (e) { }
     }
 }
 
@@ -195,7 +243,7 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
     } catch (e) {
         // Fallback for text messages
         if (e.message.includes('there is no caption') || e.message.includes('message is not modified')) {
-            if (e.message.includes('message is not modified')) return; // Ignore "not modified" errors
+            if (e.message.includes('message is not modified')) return;
 
             try {
                 if (inlineMessageId) {
@@ -203,9 +251,7 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
                 } else if (chatId && messageId) {
                     await bot.editMessageText(caption, { chat_id: chatId, message_id: messageId, reply_markup });
                 }
-            } catch (innerError) {
-                // Ignore
-            }
+            } catch (innerError) { /* ignore */ }
         }
     }
 }
