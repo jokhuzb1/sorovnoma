@@ -2,7 +2,8 @@ const db = require('./database');
 
 // --- CACHE SETUP ---
 const membershipCache = new Map();
-const CACHE_TTL = 5 * 60 * 1000; // 5 Minutes
+const SUCCESS_TTL = 5 * 60 * 1000; // 5 Minutes for Members
+const FAILURE_TTL = 2 * 1000;      // 2 Seconds for Non-Members (Instant Retry)
 
 function getCachedMembership(userId, channel) {
     const key = `${userId}:${channel}`;
@@ -15,7 +16,8 @@ function getCachedMembership(userId, channel) {
 
 function setCachedMembership(userId, channel, isMember) {
     const key = `${userId}:${channel}`;
-    membershipCache.set(key, { isMember, expiry: Date.now() + CACHE_TTL });
+    const ttl = isMember ? SUCCESS_TTL : FAILURE_TTL;
+    membershipCache.set(key, { isMember, expiry: Date.now() + ttl });
 }
 
 // Cleanup Cache periodically (every 10 mins)
@@ -39,7 +41,7 @@ async function checkChannelMembership(bot, userId, requiredChannels) {
         // 2. Fetch from API
         try {
             const member = await bot.getChatMember(channel, userId);
-            const isMember = ['creator', 'administrator', 'member'].includes(member.status);
+            const isMember = ['creator', 'administrator', 'member', 'restricted'].includes(member.status);
 
             // Update Cache
             setCachedMembership(userId, channel, isMember);
@@ -127,17 +129,16 @@ async function handleVote(bot, query, botUsername) {
     const { id, data, message, from, inline_message_id } = query;
     const userId = from.id;
 
-    // Input Debouncing: Ignore clicks from same user on same data within 0.5 second (Snappier)
-    const uniqueKey = `${userId}:${data}`;
-    if (processingCache.has(uniqueKey)) {
-        return bot.answerCallbackQuery(id);
-    }
-    processingCache.add(uniqueKey);
-    setTimeout(() => processingCache.delete(uniqueKey), 500);
-
+    // 1. INSTANT FEEDBACK (Stop Spinner immediately)
     try {
         const [type, pollId, optionId] = data.split(':');
-        if (type !== 'vote') return;
+        if (type !== 'vote') return bot.answerCallbackQuery(id); // Just close for non-votes
+
+        // Input Debouncing
+        const uniqueKey = `${userId}:${data}`;
+        if (processingCache.has(uniqueKey)) return bot.answerCallbackQuery(id);
+        processingCache.add(uniqueKey);
+        setTimeout(() => processingCache.delete(uniqueKey), 500);
 
         const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
         if (!poll) return bot.answerCallbackQuery(id, { text: 'Sorovnoma topilmadi!' });
@@ -150,29 +151,26 @@ async function handleVote(bot, query, botUsername) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
             if (!SUPER_ADMINS.includes(userId)) {
-                // Use Cache Aware Check
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
                 if (missing.length > 0) {
-                    // Check if this is a "deep link" check via start param, or direct click
-                    // If direct click, show alert
                     if (botUsername) {
-                        // Redirect logic
                         return bot.answerCallbackQuery(id, {
                             url: `https://t.me/${botUsername}?start=verify_${pollId}`,
-                            cache_time: 0
+                            cache_time: 2 // Short cache for redirect
                         });
                     } else {
                         return bot.answerCallbackQuery(id, {
                             text: `Ovoz berish uchun ${missing.join(', ')} kanallariga azo bolishingiz kerak!`,
-                            show_alert: true
+                            show_alert: true,
+                            cache_time: 2 // Short cache for alert
                         });
                     }
                 }
             }
         }
 
-        // Time Validation
+        // If we passed checks, verify time
         const now = new Date();
         const start = poll.start_time ? new Date(poll.start_time) : null;
         const end = poll.end_time ? new Date(poll.end_time) : null;
@@ -200,7 +198,6 @@ async function handleVote(bot, query, botUsername) {
         } else {
             if (!settings.multiple_choice && userVotes.length > 0) {
                 if (settings.allow_edit) {
-                    // Switch vote: Delete old ones
                     db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
                     successMessage = 'Ovoz ozgartirildi 🔄';
                 } else {
@@ -210,8 +207,8 @@ async function handleVote(bot, query, botUsername) {
             db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
         }
 
-        // Immediate Toast Feedback
-        await bot.answerCallbackQuery(id, { text: successMessage });
+        // Send Success Toast
+        bot.answerCallbackQuery(id, { text: successMessage });
 
         // Queue UI Update
         const chatId = message ? message.chat.id : null;
