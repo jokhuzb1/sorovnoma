@@ -93,13 +93,17 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             ) VALUES (?, ?, ?, ?, ?, ?)
         `);
 
+        // Sanitize Date Inputs (Empty string -> null)
+        const startTimeVal = start_time ? start_time : null;
+        const endTimeVal = end_time ? end_time : null;
+
         const info = stmt.run(
             mediaId || null,
-            mediaType,
+            mediaType || 'none',
             question,
             settings,
-            start_time || null,
-            end_time || null
+            startTimeVal,
+            endTimeVal
         );
 
         const pollId = info.lastInsertRowid;

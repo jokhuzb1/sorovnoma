@@ -53,14 +53,20 @@ db.exec(`
     );
 `);
 
-// Migration for existing tables (if needed during dev)
-try {
-    db.prepare('ALTER TABLE polls ADD COLUMN start_time DATETIME').run();
-    db.prepare('ALTER TABLE polls ADD COLUMN end_time DATETIME').run();
-    db.prepare('ALTER TABLE polls ADD COLUMN notified INTEGER DEFAULT 0').run();
-    db.prepare("ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'admin'").run();
-} catch (e) {
-    // Columns likely exist
-}
+// Migration for existing tables (run independently)
+const migrations = [
+    'ALTER TABLE polls ADD COLUMN start_time DATETIME',
+    'ALTER TABLE polls ADD COLUMN end_time DATETIME',
+    'ALTER TABLE polls ADD COLUMN notified INTEGER DEFAULT 0',
+    "ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'admin'"
+];
+
+migrations.forEach(query => {
+    try {
+        db.prepare(query).run();
+    } catch (e) {
+        // Prepare might fail if column exists, which is fine.
+    }
+});
 
 module.exports = db;
