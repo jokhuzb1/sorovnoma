@@ -81,10 +81,10 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             }
         }
 
-        // 2. Save Poll to DB
+        // Explicitly stringify settings (SQLite JSON)
         const settings = JSON.stringify({
-            multiple_choice: multiple_choice === 'on',
-            allow_edit: allow_edit === 'on'
+            multiple_choice: multiple_choice === 'on' || multiple_choice === 'true',
+            allow_edit: allow_edit === 'on' || allow_edit === 'true'
         });
 
         const stmt = db.prepare(`
@@ -93,15 +93,23 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             ) VALUES (?, ?, ?, ?, ?, ?)
         `);
 
-        // Sanitize Date Inputs (Empty string -> null)
-        const startTimeVal = start_time ? start_time : null;
-        const endTimeVal = end_time ? end_time : null;
+        // Strict Date Cleaning
+        // If frontend sends "null" string, or empty string, or undefined -> convert to REAL null
+        let startTimeVal = null;
+        if (start_time && start_time !== 'null' && start_time.trim() !== '') {
+            startTimeVal = start_time;
+        }
+
+        let endTimeVal = null;
+        if (end_time && end_time !== 'null' && end_time.trim() !== '') {
+            endTimeVal = end_time;
+        }
 
         const info = stmt.run(
             mediaId || null,
             mediaType || 'none',
-            question,
-            settings,
+            String(question || ''), // Ensure question is string
+            settings, // Already stringified
             startTimeVal,
             endTimeVal
         );
