@@ -1,0 +1,355 @@
+const db = require('./database');
+const { updatePollMessage } = require('./voting');
+
+// State Store
+const userState = new Map();
+
+const STEPS = {
+    MEDIA: 'WAITING_MEDIA',
+    DESCRIPTION: 'WAITING_DESCRIPTION',
+    OPTIONS: 'WAITING_OPTIONS',
+    SETTINGS: 'WAITING_SETTINGS',
+    START_TIME: 'WAITING_START_TIME',
+    END_TIME: 'WAITING_END_TIME',
+    CHANNELS: 'WAITING_CHANNELS'
+};
+
+function startWizard(bot, chatId, userId) {
+    userState.set(userId, {
+        step: STEPS.MEDIA,
+        chatId: chatId,
+        poll: {
+            options: [],
+            settings: { multiple_choice: false, allow_edit: true },
+            required_channels: []
+        }
+    });
+    bot.sendMessage(chatId, '🗳️ **Yangi so\'rovnoma yaratish**\n\n1-qadam: Rasm yoki video yuboring, yoki /skip yozing.');
+}
+
+async function handleWizardStep(bot, msg) {
+    const userId = msg.from.id;
+    const state = userState.get(userId);
+
+    if (!state) return;
+
+    // Reset flow check
+    if (msg.text === '/cancel') {
+        userState.delete(userId);
+        return bot.sendMessage(state.chatId, '❌ Poll creation canceled.');
+    }
+
+    switch (state.step) {
+        case STEPS.MEDIA:
+            if (msg.photo) {
+                // Get highest resolution photo
+                state.poll.media_id = msg.photo[msg.photo.length - 1].file_id;
+                state.poll.media_type = 'photo';
+            } else if (msg.video) {
+                state.poll.media_id = msg.video.file_id;
+                state.poll.media_type = 'video';
+            } else if (msg.text === '/skip') {
+                state.poll.media_type = 'none';
+            } else {
+                return bot.sendMessage(state.chatId, '⚠️ Iltimos, rasm, video yuboring yoki /skip yozing.');
+            }
+
+            state.step = STEPS.DESCRIPTION;
+            bot.sendMessage(state.chatId, '2-qadam: So\'rovnoma matnini yuboring.');
+            break;
+
+        case STEPS.DESCRIPTION:
+            if (!msg.text) return bot.sendMessage(state.chatId, '⚠️ Iltimos, matn yuboring.');
+            state.poll.description = msg.text;
+            state.step = STEPS.OPTIONS;
+            bot.sendMessage(state.chatId, '3-qadam: Javob variantlarini yuboring (har birini alohida).', {
+                reply_markup: {
+                    keyboard: [['✅ Tugatish']],
+                    resize_keyboard: true
+                }
+            });
+            break;
+
+        case STEPS.OPTIONS:
+            if (!msg.text) return bot.sendMessage(state.chatId, '⚠️ Iltimos, javob variantini yuboring.');
+
+            const text = msg.text.trim();
+            if (text.toLowerCase() === '/done' || text === '✅ Tugatish' || text.toLowerCase() === 'done') {
+                if (state.poll.options.length < 2) {
+                    return bot.sendMessage(state.chatId, '⚠️ Kamida 2 ta variant kerak! Davom eting.');
+                }
+                state.step = STEPS.SETTINGS;
+                // Remove keyboard
+                bot.sendMessage(state.chatId, 'Options saved. Now configure settings:', { reply_markup: { remove_keyboard: true } });
+                sendSettingsMenu(bot, state.chatId, state.poll.settings);
+            } else {
+                state.poll.options.push(text);
+                bot.sendMessage(state.chatId, `✅ Added option: "${text}"`);
+            }
+            break;
+
+        case STEPS.START_TIME:
+            // Enhanced Relative/Absolute parsing logic
+            const sText = msg.text.trim();
+            if (sText.toLowerCase() === 'now') {
+                state.poll.start_time = new Date();
+            } else if (sText.match(/^(\d+)([mhd])$/)) {
+                const match = sText.match(/^(\d+)([mhd])$/);
+                const val = parseInt(match[1]);
+                const unit = match[2];
+                let ms = 0;
+                if (unit === 'm') ms = val * 60000;
+                if (unit === 'h') ms = val * 3600000;
+                if (unit === 'd') ms = val * 86400000;
+                state.poll.start_time = new Date(Date.now() + ms);
+            } else {
+                const d = new Date(sText);
+                if (isNaN(d.getTime())) return bot.sendMessage(state.chatId, '⚠️ Invalid Date. Try format `YYYY-MM-DD HH:mm`, `now`, `10m`, `2h`, `1d`.');
+                state.poll.start_time = d;
+            }
+            // Send feedback
+            const startTimeStr = state.poll.start_time.toLocaleString();
+            bot.sendMessage(state.chatId, `✅ Start Time set to: ${startTimeStr}`);
+
+            state.step = STEPS.END_TIME;
+            bot.sendMessage(state.chatId, 'Step 6: End Time\nSend format: `YYYY-MM-DD HH:mm` or `never` or relative `24h`, `30m`, `7d`.');
+            break;
+
+        case STEPS.END_TIME:
+            const eText = msg.text.trim();
+            if (eText.toLowerCase() === 'never') {
+                state.poll.end_time = null;
+            } else if (eText.match(/^(\d+)([mhd])$/)) {
+                const match = eText.match(/^(\d+)([mhd])$/);
+                const val = parseInt(match[1]);
+                const unit = match[2];
+                let ms = 0;
+                if (unit === 'm') ms = val * 60000;
+                if (unit === 'h') ms = val * 3600000;
+                if (unit === 'd') ms = val * 86400000;
+
+                // Relative to NOW
+                state.poll.end_time = new Date(Date.now() + ms);
+            } else {
+                const d = new Date(eText);
+                if (isNaN(d.getTime())) return bot.sendMessage(state.chatId, '⚠️ Invalid Date.');
+                state.poll.end_time = d;
+            }
+
+            if (state.poll.end_time) {
+                bot.sendMessage(state.chatId, `✅ End Time set to: ${state.poll.end_time.toLocaleString()}`);
+            }
+
+            state.step = STEPS.CHANNELS;
+            bot.sendMessage(state.chatId, 'Step 7: Required Channels\nSend channels (starting with @), separated by spaces.', {
+                reply_markup: {
+                    keyboard: [['✅ Tugatish']],
+                    resize_keyboard: true
+                }
+            });
+            break;
+
+        case STEPS.CHANNELS:
+            // This handled via text input for channels
+            if (msg.text === '/done' || msg.text === '✅ Tugatish') {
+                await finalizePoll(bot, userId);
+            } else {
+                // Simple validation
+                const channels = msg.text.split(' ').map(c => c.trim()).filter(c => c.startsWith('@'));
+                if (channels.length === 0) {
+                    return bot.sendMessage(state.chatId, '⚠️ Noto\'g\'ri format. Kanallarni shunday yuboring: @kanal1 @kanal2');
+                }
+                state.poll.required_channels.push(...channels);
+                bot.sendMessage(state.chatId, `✅ Qo\'shildi: ${channels.join(', ')}\nTugatish uchun tugmani bosing.`);
+            }
+            break;
+    }
+}
+
+// Settings are better handled via Inline Keyboard to toggle
+function sendSettingsMenu(bot, chatId, settings) {
+    const keyboard = [
+        [{ text: `Ko'p tanlov: ${settings.multiple_choice ? '✅' : '❌'}`, callback_data: 'wiz_toggle:multiple_choice' }],
+        [{ text: `Ovozni o'zgartirish: ${settings.allow_edit ? '✅' : '❌'}`, callback_data: 'wiz_toggle:allow_edit' }],
+        [{ text: '➡️ Keyingi qadam', callback_data: 'wiz_next' }]
+    ];
+
+    bot.sendMessage(chatId, '4-qadam: Sozlamalar', {
+        reply_markup: { inline_keyboard: keyboard }
+    });
+}
+
+// We need to attach this listener in index.js or here. 
+// Ideally exports a handler.
+function handleWizardCallback(bot, query) {
+    const userId = query.from.id;
+    const state = userState.get(userId);
+
+    const data = query.data;
+
+    // Handle settings toggles
+    if (state && state.step === STEPS.SETTINGS) {
+        if (data === 'wiz_next') {
+            state.step = STEPS.CHANNELS;
+            bot.editMessageText('5-qadam: Majburiy kanallar', {
+                chat_id: state.chatId,
+                message_id: query.message.message_id
+            });
+            bot.sendMessage(state.chatId, 'Ovoz berish uchun a\'zo bo\'lish kerak bo\'lgan kanallarni yuboring (@kanal1 @kanal2).\n\nYoki tugmani bosing:', {
+                reply_markup: {
+                    keyboard: [['✅ Tugatish']],
+                    resize_keyboard: true
+                }
+            });
+        } else if (data.startsWith('wiz_toggle:')) {
+            const key = data.split(':')[1];
+            state.poll.settings[key] = !state.poll.settings[key];
+
+            const keyboard = [
+                [{ text: `Ko'p tanlov: ${state.poll.settings.multiple_choice ? '✅' : '❌'}`, callback_data: 'wiz_toggle:multiple_choice' }],
+                [{ text: `Ovozni o'zgartirish: ${state.poll.settings.allow_edit ? '✅' : '❌'}`, callback_data: 'wiz_toggle:allow_edit' }],
+                [{ text: '➡️ Keyingi qadam', callback_data: 'wiz_next' }]
+            ];
+
+            bot.editMessageReplyMarkup({ inline_keyboard: keyboard }, {
+                chat_id: state.chatId,
+                message_id: query.message.message_id
+            });
+        }
+        return;
+    }
+
+    // Handle start time selection
+    if (data.startsWith('time_start:')) {
+        if (!state) return;
+        const value = data.split(':')[1];
+        const timeMap = {
+            'now': 0,
+            '10m': 10 * 60000,
+            '30m': 30 * 60000,
+            '1h': 3600000,
+            '3h': 3 * 3600000,
+            '1d': 86400000
+        };
+        state.poll.start_time = new Date(Date.now() + timeMap[value]);
+
+        state.step = STEPS.END_TIME;
+        const keyboard = [
+            [{ text: 'Hech qachon tugamasin', callback_data: 'time_end:never' }],
+            [{ text: '1 soatdan keyin', callback_data: 'time_end:1h' }],
+            [{ text: '3 soatdan keyin', callback_data: 'time_end:3h' }],
+            [{ text: '12 soatdan keyin', callback_data: 'time_end:12h' }],
+            [{ text: '1 kundan keyin', callback_data: 'time_end:1d' }],
+            [{ text: '3 kundan keyin', callback_data: 'time_end:3d' }],
+            [{ text: '7 kundan keyin', callback_data: 'time_end:7d' }]
+        ];
+        bot.editMessageText('6-qadam: Tugash vaqti\\nQachon tugashini tanlang:', {
+            chat_id: state.chatId,
+            message_id: query.message.message_id,
+            reply_markup: { inline_keyboard: keyboard }
+        });
+        return;
+    }
+
+    // Handle end time selection
+    if (data.startsWith('time_end:')) {
+        if (!state) return;
+        const value = data.split(':')[1];
+        if (value === 'never') {
+            state.poll.end_time = null;
+        } else {
+            const timeMap = {
+                '1h': 3600000,
+                '3h': 3 * 3600000,
+                '12h': 12 * 3600000,
+                '1d': 86400000,
+                '3d': 3 * 86400000,
+                '7d': 7 * 86400000
+            };
+            state.poll.end_time = new Date(Date.now() + timeMap[value]);
+        }
+
+        state.step = STEPS.CHANNELS;
+        bot.editMessageText('7-qadam: Majburiy kanallar', {
+            chat_id: state.chatId,
+            message_id: query.message.message_id
+        });
+        bot.sendMessage(state.chatId, 'Ovoz berish uchun a\'zo bo\'lish kerak bo\'lgan kanallarni yuboring (@kanal1 @kanal2).', {
+            reply_markup: {
+                keyboard: [['✅ Tugatish']],
+                resize_keyboard: true
+            }
+        });
+        return;
+    }
+}
+
+async function finalizePoll(bot, userId) {
+    const state = userState.get(userId);
+    if (!state) return;
+
+    const { poll, chatId } = state;
+
+    // Save to DB
+    try {
+        const stmt = db.prepare('INSERT INTO polls (media_id, media_type, description, settings_json, start_time, end_time) VALUES (?, ?, ?, ?, ?, ?)');
+        // Convert dates to ISO strings for SQLite
+        const start = state.poll.start_time ? state.poll.start_time.toISOString() : null;
+        const end = state.poll.end_time ? state.poll.end_time.toISOString() : null;
+
+        const result = stmt.run(poll.media_id, poll.media_type, poll.description, JSON.stringify(poll.settings), start, end);
+        const pollId = result.lastInsertRowid;
+
+        const optStmt = db.prepare('INSERT INTO options (poll_id, text) VALUES (?, ?)');
+        for (const opt of poll.options) {
+            optStmt.run(pollId, opt);
+        }
+
+        const chanStmt = db.prepare('INSERT INTO required_channels (poll_id, channel_username) VALUES (?, ?)');
+        for (const chan of poll.required_channels) {
+            chanStmt.run(pollId, chan);
+        }
+
+        userState.delete(userId);
+
+        bot.sendMessage(chatId, `🎉 Poll Created! ID: ${pollId}`);
+
+        // Preview the poll (reuse voting logic rendering)
+        // We need to send a fresh message
+        const options = db.prepare('SELECT * FROM options WHERE poll_id = ?').all(pollId);
+        const inline_keyboard = options.map(opt => [{
+            text: `${opt.text} (0)`,
+            callback_data: `vote:${pollId}:${opt.id}` // Corrected template string syntax
+        }]);
+
+        const settings = poll.settings;
+        const mode = settings.multiple_choice ? 'Multiple Choice' : 'Single Choice';
+        const caption = `${poll.description}\n\n📊 Total Votes: 0\n⚙️ Mode: ${mode}`;
+
+        if (poll.media_type === 'photo') {
+            await bot.sendPhoto(chatId, poll.media_id, { caption, reply_markup: { inline_keyboard } });
+        } else if (poll.media_type === 'video') {
+            await bot.sendVideo(chatId, poll.media_id, { caption, reply_markup: { inline_keyboard } });
+        } else {
+            await bot.sendMessage(chatId, caption, { reply_markup: { inline_keyboard } });
+        }
+
+        // Restore Main Menu
+        bot.sendMessage(chatId, 'So\'rovnoma yuqorida joylashtirildi.', {
+            reply_markup: {
+                keyboard: [
+                    ['📝 So\'rovnoma yaratish'],
+                    ['📋 So\'rovnoma ro\'yxatlari', '⏳ Davom etayotgan']
+                ],
+                resize_keyboard: true
+            }
+        });
+
+    } catch (e) {
+        console.error(e);
+        bot.sendMessage(chatId, '❌ Ma\'lumotlar bazasiga saqlashda xatolik.');
+        userState.delete(userId);
+    }
+}
+
+module.exports = { startWizard, handleWizardStep, handleWizardCallback };

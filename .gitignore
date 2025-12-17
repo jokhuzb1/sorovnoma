@@ -1,0 +1,6 @@
+node_modules/
+.env
+data/
+caddy_data/
+caddy_config/
+.DS_Store

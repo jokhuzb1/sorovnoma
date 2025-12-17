@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sorovnoma Yaratish</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="dark-mode">
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>Yangi Sorovnoma</h1>
+            <p>Sorovnoma ma'lumotlarini to'ldiring</p>
+        </header>
+
+        <form id="pollForm">
+            <!-- Media Upload -->
+            <div class="card media-card">
+                <label for="mediaInput" class="media-upload-area" id="dropZone">
+                    <div class="icon">📁</div>
+                    <span id="fileLabel">Rasm yoki Video yuklash (ixtiyoriy)</span>
+                    <input type="file" id="mediaInput" name="media" accept="image/*,video/*" hidden>
+                </label>
+            </div>
+
+            <!-- Question -->
+            <div class="input-group">
+                <label>Sorovnoma matni</label>
+                <textarea id="question" name="question" placeholder="Savolingizni yozing..." required rows="3"></textarea>
+            </div>
+
+            <!-- Options -->
+            <div class="input-group">
+                <label>Javob variantlari</label>
+                <div id="optionsContainer">
+                    <div class="option-row">
+                        <input type="text" name="options[]" placeholder="Variant 1" required>
+                    </div>
+                    <div class="option-row">
+                        <input type="text" name="options[]" placeholder="Variant 2" required>
+                    </div>
+                </div>
+                <button type="button" class="btn-secondary" id="addOptionBtn">+ Variant qo'shish</button>
+            </div>
+
+            <!-- Settings -->
+            <div class="card settings-card">
+                <h3>Sozlamalar</h3>
+                
+                <div class="toggle-row">
+                    <span>Ko'p tanlov (Multiple choice)</span>
+                    <label class="switch">
+                        <input type="checkbox" name="multiple_choice" id="multiChoice">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+
+                <div class="toggle-row">
+                    <span>Ovozni o'zgartirish (Retract vote)</span>
+                    <label class="switch">
+                        <input type="checkbox" name="allow_edit" id="allowEdit">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- Date & Time -->
+            <div class="card settings-card">
+                <h3>Vaqt Cheklovlari (Ixtiyoriy)</h3>
+                
+                <div class="input-group">
+                    <label>Boshlanish vaqti</label>
+                    <input type="datetime-local" name="start_time" id="startTime">
+                </div>
+
+                <div class="input-group">
+                    <label>Tugash vaqti</label>
+                    <input type="datetime-local" name="end_time" id="endTime">
+                </div>
+            </div>
+
+             <!-- Channels -->
+             <div class="input-group">
+                <label>Majburiy Kanallar</label>
+                <input type="text" id="channels" name="channels" placeholder="@kanal1, @kanal2 (vergul bilan)">
+                <small>Bot bu kanallarda admin bo'lishi shart!</small>
+            </div>
+
+        </form>
+    </div>
+    
+    <!-- Floating Action Button -->
+    <div class="fab-container">
+        <button type="button" id="submitBtn" class="btn-primary">Yaratish</button>
+    </div>
+
+    <div id="loader" class="loader hidden"></div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
