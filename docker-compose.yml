@@ -8,22 +8,5 @@ services:
       - ./data:/usr/src/app/data
     env_file:
       - .env
-    expose:
-      - "3000"
-
-  caddy:
-    image: caddy:latest
-    restart: always
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - bot
-
-volumes:
-  caddy_data:
-  caddy_config:
+      - "4000:3000"  # Expose internal 3000 to external 4000
