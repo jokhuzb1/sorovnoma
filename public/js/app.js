@@ -96,7 +96,19 @@ submitBtn.addEventListener('click', async () => {
             body: formData
         });
 
-        const result = await response.json();
+        // Check for HTTP errors first (e.g., 413 Payload Too Large, 500 Server Error)
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`Server Error (${response.status}): ${text.substring(0, 100)}...`);
+        }
+
+        const text = await response.text();
+        let result;
+        try {
+            result = JSON.parse(text);
+        } catch (e) {
+            throw new Error(`Invalid JSON Response: ${text.substring(0, 100)}...`);
+        }
 
         if (result.success) {
             tg.showPopup({
