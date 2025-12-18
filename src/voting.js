@@ -178,99 +178,109 @@ async function handleVote(bot, query, botUsername) {
                     if (botUsername) {
                         try {
                             console.log(`[Vote] Redirecting ${userId} to ${botUsername} (verify_${pollId})`);
-                            // Deep Link Redirect to Bot PM
-                            // Using tg://resolve is often more reliable for instant switching on mobile
-                            return bot.answerCallbackQuery(id, {
-                                url: `tg://resolve?domain=${botUsername}&start=verify_${pollId}`,
-                                cache_time: 2
+                            // Revert to https://t.me format as tg:// is not supported in answerCallbackQuery url param
+                            // await is essential to catch errors locally
+                            await bot.answerCallbackQuery(id, {
+                                url: `https://t.me/${botUsername}?start=verify_${pollId}`,
+                                cache_time: 0 // Disable cache to ensure reliability
                             });
+                            return; // Stop execution
                         } catch (e) {
-                            console.error('Deep link redirect failed:', e.message);
+                            console.error(`[Vote] Redirect Failed for ${userId}:`, e.message);
+                            // Fallback alert if redirect fails
+                            await bot.answerCallbackQuery(id, {
+                                text: `⚠️ Iltimos, kanalga obuna bo'ling va qayta urinib ko'ring.`,
+                                show_alert: true,
+                                cache_time: 0
+                            });
+                            return;
                         }
-                    } else {
-                        console.error('[Vote] Bot Username missing!');
+                        console.error('Deep link redirect failed:', e.message);
                     }
-
-                    // Fallback (or if botUsername missing): Alert
-                    return bot.answerCallbackQuery(id, {
-                        text: `❌ Ovoz berish uchun kanalga a'zo bo'ling!`,
-                        show_alert: true,
-                        cache_time: 2
-                    });
+                } else {
+                    console.error('[Vote] Bot Username missing!');
                 }
+
+                // Fallback (or if botUsername missing): Alert
+                return bot.answerCallbackQuery(id, {
+                    text: `❌ Ovoz berish uchun kanalga a'zo bo'ling!`,
+                    show_alert: true,
+                    cache_time: 2
+                });
             }
         }
+    }
 
         // Time Check
         const now = new Date();
-        const start = poll.start_time ? new Date(poll.start_time) : null;
-        const end = poll.end_time ? new Date(poll.end_time) : null;
+    const start = poll.start_time ? new Date(poll.start_time) : null;
+    const end = poll.end_time ? new Date(poll.end_time) : null;
 
-        if (start && now < start) {
-            return bot.answerCallbackQuery(id, { text: `⏳ Sorovnoma ${Math.ceil((start - now) / 60000)} daqiqadan keyin boshlanadi.`, show_alert: true });
-        }
-        if (end && now > end) {
-            return bot.answerCallbackQuery(id, { text: '🔒 Sorovnoma yopilgan.', show_alert: true });
-        }
-
-        // --- TRANSACTIONAL VOTING LOGIC ---
-        // We define the transaction
-        const executeVoteTransaction = db.transaction(() => {
-            const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
-            const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
-
-            let message = 'Ovoz qabul qilindi';
-
-            if (existingVote) {
-                // Remove Vote
-                if (settings.allow_edit || settings.multiple_choice) {
-                    db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
-                    message = 'Ovoz olib tashlandi ↩️';
-                } else {
-                    throw new Error('Ovozni ozgartira olmaysiz.');
-                }
-            } else {
-                // Add Vote
-                if (!settings.multiple_choice && userVotes.length > 0) {
-                    // Single choice, already voted
-                    if (settings.allow_edit) {
-                        // Switch vote
-                        db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
-                        message = 'Ovoz ozgartirildi 🔄';
-                    } else {
-                        throw new Error('Faqat bitta variant tanlash mumkin.');
-                    }
-                }
-                db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
-            }
-            return message;
-        });
-
-        // Execute Transaction
-        let successMessage;
-        try {
-            successMessage = executeVoteTransaction();
-        } catch (txError) {
-            // Logic errors inside transaction (like "can't edit")
-            return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
-        }
-
-        // Send Success Toast
-        bot.answerCallbackQuery(id, { text: successMessage });
-
-        // Queue UI Update
-        const chatId = message ? message.chat.id : null;
-        const messageId = message ? message.message_id : null;
-        const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
-
-        if (!updateQueue.has(key)) {
-            updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id });
-        }
-
-    } catch (error) {
-        console.error('Vote Error:', error);
-        try { bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi' }); } catch (e) { }
+    if (start && now < start) {
+        return bot.answerCallbackQuery(id, { text: `⏳ Sorovnoma ${Math.ceil((start - now) / 60000)} daqiqadan keyin boshlanadi.`, show_alert: true });
     }
+    if (end && now > end) {
+        return bot.answerCallbackQuery(id, { text: '🔒 Sorovnoma yopilgan.', show_alert: true });
+    }
+
+    // --- TRANSACTIONAL VOTING LOGIC ---
+    // We define the transaction
+    const executeVoteTransaction = db.transaction(() => {
+        const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
+        const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
+
+        let message = 'Ovoz qabul qilindi';
+
+        if (existingVote) {
+            // Remove Vote
+            if (settings.allow_edit || settings.multiple_choice) {
+                db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
+                message = 'Ovoz olib tashlandi ↩️';
+            } else {
+                throw new Error('Ovozni ozgartira olmaysiz.');
+            }
+        } else {
+            // Add Vote
+            if (!settings.multiple_choice && userVotes.length > 0) {
+                // Single choice, already voted
+                if (settings.allow_edit) {
+                    // Switch vote
+                    db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
+                    message = 'Ovoz ozgartirildi 🔄';
+                } else {
+                    throw new Error('Faqat bitta variant tanlash mumkin.');
+                }
+            }
+            db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
+        }
+        return message;
+    });
+
+    // Execute Transaction
+    let successMessage;
+    try {
+        successMessage = executeVoteTransaction();
+    } catch (txError) {
+        // Logic errors inside transaction (like "can't edit")
+        return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
+    }
+
+    // Send Success Toast
+    bot.answerCallbackQuery(id, { text: successMessage });
+
+    // Queue UI Update
+    const chatId = message ? message.chat.id : null;
+    const messageId = message ? message.message_id : null;
+    const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
+
+    if (!updateQueue.has(key)) {
+        updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id });
+    }
+
+} catch (error) {
+    console.error('Vote Error:', error);
+    try { bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi' }); } catch (e) { }
+}
 }
 
 async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null) {
