@@ -9,6 +9,7 @@ if (!fs.existsSync(dataDir)) {
 }
 
 const db = new Database(path.join(dataDir, 'voting.db'));
+db.pragma('journal_mode = WAL'); // Enable Write-Ahead Logging for concurrency
 db.pragma('foreign_keys = ON');
 
 // Initialize Schema

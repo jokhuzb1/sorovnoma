@@ -172,38 +172,51 @@ async function handleVote(bot, query) {
                 console.log(`[Vote] User: ${userId}, Missing: ${missing.length > 0 ? missing.join(', ') : 'None'}`);
 
                 if (missing.length > 0) {
-                    const userMention = `<a href="tg://user?id=${userId}">${from.first_name || 'Foydalanuvchi'}</a>`;
-                    const channelsList = missing.map(ch => `👉 ${ch}`).join('\n');
-                    const warningText = `⚠️ ${userMention}, ovoz berish uchun quyidagi kanallarga obuna bo'ling:\n\n${channelsList}`;
-
-                    try {
-                        const sentMsg = await bot.sendMessage(message.chat.id, warningText, {
-                            parse_mode: 'HTML',
-                            disable_web_page_preview: true
-                        });
-
-                        // Show toast to user
-                        await bot.answerCallbackQuery(id, {
-                            text: "⚠️ Avval kanallarga a'zo bo'ling (Chatdagi xabarni o'qing)!",
-                            show_alert: false, // Toast, not popup
-                            cache_time: 2 // Short cache
-                        });
-
-                        // Auto-delete warning after 20 seconds to avoid spam
-                        setTimeout(() => {
-                            bot.deleteMessage(message.chat.id, sentMsg.message_id).catch(() => { });
-                        }, 20000);
-
-                    } catch (err) {
-                        console.error('[Vote] Failed to send warning message:', err.message);
-                        // Fallback to alert if sending message fails (e.g. permission issues)
-                        await bot.answerCallbackQuery(id, {
-                            text: `⚠️ Iltimos, kanalga obuna bo'ling:\n${missing.join('\n')}`,
-                            show_alert: true,
-                            cache_time: 0
-                        });
+                    // SMART REDIRECT STRATEGY
+                    // 1. If only 1 channel is missing, redirect DIRECTLY to that channel.
+                    // This provides the best UX (no Bot Start screen, no "Verify" button needed).
+                    if (missing.length === 1) {
+                        const channelUsername = missing[0].replace('@', '');
+                        try {
+                            await bot.answerCallbackQuery(id, {
+                                url: `https://t.me/${channelUsername}`,
+                                cache_time: 0
+                            });
+                            return;
+                        } catch (e) {
+                            console.error(`[Vote] Direct Channel Redirect Failed:`, e.message);
+                        }
                     }
-                    return;
+
+                    // 2. If multiple channels are missing, we MUST use the Bot Bridge.
+                    if (botUsername) {
+                        try {
+                            console.log(`[Vote] Redirecting ${userId} to ${botUsername} (verify_${pollId})`);
+                            await bot.answerCallbackQuery(id, {
+                                url: `https://t.me/${botUsername}?start=verify_${pollId}`,
+                                cache_time: 0
+                            });
+                            return;
+                        } catch (e) {
+                            console.error(`[Vote] Redirect Failed for ${userId}:`, e.message);
+                            // Fallback alert
+                            await bot.answerCallbackQuery(id, {
+                                text: `⚠️ Iltimos, kanallarga obuna bo'ling va qayta urinib ko'ring.`,
+                                show_alert: true,
+                                cache_time: 0
+                            });
+                            return;
+                        }
+                    } else {
+                        console.error('[Vote] Bot Username missing!');
+                    }
+
+                    // Fallback
+                    return bot.answerCallbackQuery(id, {
+                        text: `❌ Ovoz berish uchun kanalga a'zo bo'ling!`,
+                        show_alert: true,
+                        cache_time: 0
+                    });
                 }
             }
         }
