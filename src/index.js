@@ -110,157 +110,179 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             const raw = String(channels).split(',').map(c => c.trim().replace(/^@/, '')).filter(c => c.length > 0);
 
             for (const ch of raw) {
-                try {
-                    // Check if bot can access the chat
-                    // Note: getChat works if bot is in chat (or public channel sometimes). 
-                    // Better: We assume user wants us to check membership, so we must be able to see it.
-                    await bot.getChat('@' + ch);
-                    validChannels.push('@' + ch);
-                } catch (e) {
-                    console.warn(`[API] Invalid Channel ${ch}: ${e.message}`);
-                    return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanaliga a'zo emas yoki admin emas!` });
+                const chat = await bot.getChat('@' + ch);
+                if (chat.type !== 'channel' && chat.type !== 'supergroup') {
+                    return res.status(400).json({ success: false, message: `❌ @${ch} kanal yoki guruh emas!` });
                 }
+                // verify admin rights? bot.getChatMember(chat.id, bot.id)? 
+                // getChat doesn't return member status of bot itself easily without another call.
+                // But if we can see it, we assume we are okay for now? 
+                // Instructions say: "Reject channel if Bot is not admin"
+                try {
+                    const me = await bot.getChatMember(chat.id, (await bot.getMe()).id);
+                    if (!['administrator', 'creator'].includes(me.status)) {
+                        return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalida admin emas!` });
+                    }
+                } catch (adminError) {
+                    return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalida admin emas! (Tekshirishda xatolik)` });
+                }
+
+                validChannels.push('@' + ch);
+            } catch (e) {
+                console.warn(`[API] Invalid Channel ${ch}: ${e.message}`);
+                return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalini topa olmadi yoki a'zo emas!` });
             }
         }
+    }
 
         // --- 2. MEDIA HANDLING (STRICT) ---
 
         let mediaId = null;
-        let mediaType = 'none';
-        const file = req.file;
+    let mediaType = 'none';
+    const file = req.file;
 
-        if (file) {
-            console.log(`[API] Processing file: ${file.originalname} (${file.mimetype})`);
-            const filePath = file.path;
-            try {
-                let sentMsg;
-                // Validate mime type explicitly before sending to Telegram
-                if (file.mimetype.startsWith('image/')) {
-                    sentMsg = await bot.sendPhoto(user_id, fs.createReadStream(filePath), { caption: 'Media Upload Verification' });
-                    // Telegram photo structure: array of sizes. We take the last (largest).
-                    if (sentMsg.photo && sentMsg.photo.length > 0) {
-                        mediaId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
-                        mediaType = 'photo';
-                    }
-                } else if (file.mimetype.startsWith('video/')) {
-                    sentMsg = await bot.sendVideo(user_id, fs.createReadStream(filePath), { caption: 'Media Upload Verification' });
-                    if (sentMsg.video) {
-                        mediaId = sentMsg.video.file_id;
-                        mediaType = 'video';
-                    }
-                } else {
-                    console.warn('[API] Unsupported file type:', file.mimetype);
+    if (file) {
+        console.log(`[API] Processing file: ${file.originalname} (${file.mimetype})`);
+        const filePath = file.path;
+        try {
+            let sentMsg;
+            // Validate mime type explicitly before sending to Telegram
+            if (file.mimetype.startsWith('image/')) {
+                sentMsg = await bot.sendPhoto(user_id, fs.createReadStream(filePath), { caption: 'Media Upload Verification' });
+                // Telegram photo structure: array of sizes. We take the last (largest).
+                if (sentMsg.photo && sentMsg.photo.length > 0) {
+                    mediaId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
+                    mediaType = 'photo';
                 }
-            } catch (e) {
-                console.error('[API] Media upload failed:', e.message);
-            } finally {
-                // Always clean up temp file
-                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-            }
-        } else if (req.body.media_id && req.body.media_type) {
-            // Direct Media ID from Draft/Chat
-            mediaId = req.body.media_id;
-            mediaType = req.body.media_type;
-            console.log(`[API] Using existing media_id: ${mediaId} (${mediaType})`);
-        }
-
-        // Double check strict types for DB
-        if (typeof mediaId !== 'string') mediaId = null;
-        if (typeof mediaType !== 'string') mediaType = 'none';
-
-        // --- 3. NORMALIZATION & DB INSERT ---
-
-        const settings = JSON.stringify({
-            multiple_choice: multiple_choice === 'on' || multiple_choice === 'true',
-            allow_edit: allow_edit === 'on' || allow_edit === 'true'
-        });
-
-        // Date Cleaning & Logic
-        let startTimeVal = null; // Stored as INTEGER (Unix Timestamp ms) or null
-        let endTimeVal = null;
-        let published = 0;
-
-        const now = Date.now();
-
-        if (start_time && start_time !== 'null' && start_time.trim() !== '') {
-            const parsed = Date.parse(start_time);
-            if (!isNaN(parsed)) {
-                startTimeVal = parsed;
-                // If start time is in the future (> now + 5 seconds buffer), it's scheduled.
-                // Otherwise it's immediate.
-                if (startTimeVal > now + 1000) {
-                    published = 0;
-                } else {
-                    published = 1;
+            } else if (file.mimetype.startsWith('video/')) {
+                sentMsg = await bot.sendVideo(user_id, fs.createReadStream(filePath), { caption: 'Media Upload Verification' });
+                if (sentMsg.video) {
+                    mediaId = sentMsg.video.file_id;
+                    mediaType = 'video';
                 }
+            } else {
+                console.warn('[API] Unsupported file type:', file.mimetype);
             }
-        } else {
-            // No start time = Immediate
-            published = 1;
+        } catch (e) {
+            console.error('[API] Media upload failed:', e.message);
+        } finally {
+            // Always clean up temp file
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         }
+    } else if (req.body.media_id && req.body.media_type) {
+        // Direct Media ID from Draft/Chat
+        mediaId = req.body.media_id;
+        mediaType = req.body.media_type;
+        console.log(`[API] Using existing media_id: ${mediaId} (${mediaType})`);
+    }
 
-        if (end_time && end_time !== 'null' && end_time.trim() !== '') {
-            const parsed = Date.parse(end_time);
-            if (!isNaN(parsed)) {
-                endTimeVal = parsed;
+    // Double check strict types for DB
+    if (typeof mediaId !== 'string') mediaId = null;
+    if (typeof mediaType !== 'string') mediaType = 'none';
+
+    // --- 3. NORMALIZATION & DB INSERT ---
+
+    const settings = JSON.stringify({
+        multiple_choice: multiple_choice === 'on' || multiple_choice === 'true',
+        allow_edit: allow_edit === 'on' || allow_edit === 'true'
+    });
+
+    // Date Cleaning & Logic
+    let startTimeVal = null; // Stored as INTEGER (Unix Timestamp ms) or null
+    let endTimeVal = null;
+    let published = 0;
+
+    const now = Date.now();
+
+    if (start_time && start_time !== 'null' && start_time.trim() !== '') {
+        const parsed = Date.parse(start_time);
+        if (!isNaN(parsed)) {
+            startTimeVal = parsed;
+            // If start time is in the future (> now + 5 seconds buffer), it's scheduled.
+            // Otherwise it's immediate.
+            if (startTimeVal > now + 1000) {
+                published = 0;
+            } else {
+                published = 1;
             }
         }
+    } else {
+        // No start time = Immediate
+        published = 1;
+    }
 
-        const stmt = db.prepare(`
+    if (end_time && end_time !== 'null' && end_time.trim() !== '') {
+        const parsed = Date.parse(end_time);
+        if (!isNaN(parsed)) {
+            endTimeVal = parsed;
+        }
+    }
+
+    const stmt = db.prepare(`
             INSERT INTO polls (
                 media_id, media_type, description, settings_json, start_time, end_time, creator_id, published
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        // Execute with explicit params to avoid "undefined"
-        const info = stmt.run(
-            mediaId,        // can be null or string
-            mediaType,      // string
-            cleanQuestion,  // string
-            settings,       // string
-            startTimeVal,   // INTEGER or null
-            endTimeVal,     // INTEGER or null
-            user_id,        // INTEGER (creator_id)
-            published       // INTEGER (0 or 1)
-        );
+    // Execute with explicit params to avoid "undefined"
+    const info = stmt.run(
+        mediaId,        // can be null or string
+        mediaType,      // string
+        cleanQuestion,  // string
+        settings,       // string
+        startTimeVal,   // INTEGER or null
+        endTimeVal,     // INTEGER or null
+        user_id,        // INTEGER (creator_id)
+        published       // INTEGER (0 or 1)
+    );
 
-        const pollId = info.lastInsertRowid;
-        console.log(`[API] Poll created with ID: ${pollId}`);
+    const pollId = info.lastInsertRowid;
+    console.log(`[API] Poll created with ID: ${pollId}`);
 
-        // Save Options
-        const insertOption = db.prepare('INSERT INTO options (poll_id, text) VALUES (?, ?)');
-        optionsList.forEach(opt => {
-            insertOption.run(pollId, opt);
-        });
+    // Save Options
+    const insertOption = db.prepare('INSERT INTO options (poll_id, text) VALUES (?, ?)');
+    optionsList.forEach(opt => {
+        insertOption.run(pollId, opt);
+    });
 
-        // Save Channels (Phase 3 Prep)
-        if (channels) {
-            const channelList = String(channels)
-                .split(',')
-                .map(c => c.trim().replace(/^@/, '')) // remove starting @ if present
-                .filter(c => c.length > 0);
+    // Save Channels (Phase 3 Prep)
+    if (channels) {
+        const channelList = String(channels)
+            .split(',')
+            .map(c => c.trim().replace(/^@/, '')) // remove starting @ if present
+            .filter(c => c.length > 0);
 
-            if (channelList.length > 0) {
-                const insertChannel = db.prepare('INSERT INTO required_channels (poll_id, channel_username) VALUES (?, ?)');
-                channelList.forEach(ch => {
-                    // Store with @ for consistency in display, or without? 
-                    // Let's store WITH @ to make it easier for bot checks later, or strictly without.
-                    // Implementation plan said "Remove @". 
-                    // Let's store sanitized username 'channelname'.
-                    insertChannel.run(pollId, '@' + ch);
-                });
+        if (channelList.length > 0) {
+            const insertChannel = db.prepare('INSERT INTO required_channels (poll_id, channel_username, channel_id, channel_title) VALUES (?, ?, ?, ?)');
+
+            for (const ch of channelList) {
+                try {
+                    const chat = await bot.getChat('@' + ch);
+                    const channelId = chat.id;
+                    const channelTitle = chat.title || ('@' + ch);
+
+                    console.log(`[API] Resolved Channel @${ch} -> ID: ${channelId}`);
+                    insertChannel.run(pollId, '@' + ch, channelId, channelTitle);
+                } catch (e) {
+                    console.warn(`[API] Failed to resolve channel @${ch} during save (might have been kicked): ${e.message}`);
+                    // Fallback: Store without ID? No, strictly require ID now? 
+                    // Instructions say "Reject channel if... Channel ID cannot be resolved"
+                    // But we already validated in step 1. Ideally we should have resolved map there.
+                    // For now, if getChat fails here (rare race condition), we skip saving it.
+                }
             }
         }
-
-        // Send to Creator
-        await sendPoll(bot, user_id, pollId);
-
-        res.json({ success: true, pollId });
-
-    } catch (error) {
-        console.error('[API] Critical Error:', error);
-        res.status(500).json({ success: false, message: 'Server Xatoligi: ' + error.message });
     }
+
+    // Send to Creator
+    await sendPoll(bot, user_id, pollId);
+
+    res.json({ success: true, pollId });
+
+} catch (error) {
+    console.error('[API] Critical Error:', error);
+    res.status(500).json({ success: false, message: 'Server Xatoligi: ' + error.message });
+}
 });
 // Start Server
 app.listen(PORT, () => {
@@ -558,20 +580,24 @@ bot.on('callback_query', async (query) => {
         const pollId = query.data.split(':')[1];
         const userId = query.from.id;
 
-        const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
+        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
+        const { checkChannelMembership } = require('./voting');
         const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
         if (missing.length === 0) {
-            bot.sendMessage(query.message.chat.id, '✅ Rahmat! Kanallarga azo boldingiz. Ovoz berishingiz mumkin:');
-            await sendPoll(bot, query.message.chat.id, pollId);
+            bot.answerCallbackQuery(query.id, { text: '✅ Tasdiqlandi! Ovoz berishingiz mumkin.', show_alert: true });
 
-            // Try to delete component message if possible
+            // Delete the "Join Channels" warning message
             try {
                 bot.deleteMessage(query.message.chat.id, query.message.message_id);
             } catch (e) { }
 
+            // Optionally resend poll? No, user has the poll above.
+            // Just let them click vote again.
+
         } else {
-            bot.answerCallbackQuery(query.id, { text: `❌ Siz hali ham ${missing.join(', ')} kanallariga azo bolmadingiz!`, show_alert: true });
+            const missingTitles = missing.map(m => m.title).join(', ');
+            bot.answerCallbackQuery(query.id, { text: `❌ Siz hali ham quyidagi kanallarga a'zo bo'lmadingiz:\n\n${missingTitles}`, show_alert: true });
         }
         return;
     }

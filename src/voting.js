@@ -1,62 +1,29 @@
 const db = require('./database');
 
-// --- CACHE SETUP ---
-const membershipCache = new Map();
-const SUCCESS_TTL = 5 * 60 * 1000; // 5 Minutes for Members
-const FAILURE_TTL = 2 * 1000;      // 2 Seconds for Non-Members (Instant Retry)
-
-function getCachedMembership(userId, channel) {
-    const key = `${userId}:${channel}`;
-    const cached = membershipCache.get(key);
-    if (cached && Date.now() < cached.expiry) {
-        return cached.isMember;
-    }
-    return null;
-}
-
-function setCachedMembership(userId, channel, isMember) {
-    const key = `${userId}:${channel}`;
-    const ttl = isMember ? SUCCESS_TTL : FAILURE_TTL;
-    membershipCache.set(key, { isMember, expiry: Date.now() + ttl });
-}
-
-// Cleanup Cache periodically (every 10 mins)
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, value] of membershipCache.entries()) {
-        if (now > value.expiry) membershipCache.delete(key);
-    }
-}, 10 * 60 * 1000);
-// -------------------
-
+// NO CACHING - STRICT CHECK
 async function checkChannelMembership(bot, userId, requiredChannels) {
-    // Parallel Execution with Caching
-    const results = await Promise.all(requiredChannels.map(async (channel) => {
-        // 1. Check Cache
-        const cached = getCachedMembership(userId, channel);
-        if (cached !== null) {
-            return cached ? null : channel; // If member, return null (success), else return channel (missing)
-        }
+    const missing = [];
+    for (const channel of requiredChannels) {
+        // channel is object { channel_id, channel_title, channel_username }
+        // Fallback for old data: use username if id missing (but we expect IDs now)
+        const target = channel.channel_id || channel.channel_username;
+        const title = channel.channel_title || channel.channel_username;
 
-        // 2. Fetch from API
         try {
-            const member = await bot.getChatMember(channel, userId);
-            const isMember = ['creator', 'administrator', 'member', 'restricted'].includes(member.status);
+            console.log(`[channel_check] Poll: ${channel.poll_id} | User: ${userId} | Channel: ${target}`);
+            const member = await bot.getChatMember(target, userId);
+            console.log(`[channel_check] Status: ${member.status}`);
 
-            // Update Cache
-            setCachedMembership(userId, channel, isMember);
-
-            if (!isMember) return channel;
-        } catch (error) {
-            console.error(`Error checking membership for ${channel}: `, error.message);
-            // On error (e.g. bot kicked), treat as NOT member to be safe
-            return channel;
+            if (!['creator', 'administrator', 'member'].includes(member.status)) {
+                missing.push({ id: target, title: title, url: channel.channel_username ? `https://t.me/${channel.channel_username.replace('@', '')}` : null });
+            }
+        } catch (e) {
+            console.error(`[channel_check] Error checking ${target}: ${e.message}`);
+            // If check fails, we assume MISSING/BLOCKED to be safe (or bot kicked)
+            missing.push({ id: target, title: title, error: true });
         }
-        return null; // Is member
-    }));
-
-    // Filter out nulls (meaning they ARE members) to leave only MISSING channels
-    return results.filter(c => c !== null);
+    }
+    return missing;
 }
 
 // Helper to generate Poll UI
@@ -161,171 +128,167 @@ async function handleVote(bot, query, botUsername) {
         }
 
         const settings = JSON.parse(poll.settings_json || '{}');
-        const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
-
-        // console.log(`[Vote] Required Channels: ${requiredChannels.join(', ')}`);
+        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
 
         // Gatekeeping Check (Async - outside transaction)
         if (requiredChannels.length > 0) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
             if (!SUPER_ADMINS.includes(userId)) {
-                // Check membership (Fast with Cache)
+                // Check membership (Strict, No Cache)
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
-                console.log(`[Vote] User: ${userId}, Missing: ${missing.length > 0 ? missing.join(', ') : 'None'}`);
 
                 if (missing.length > 0) {
-                    if (botUsername) {
-                        try {
-                            const redirectUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
-                            // console.log(`[Vote] Redirecting ${userId} to ${redirectUrl}`);
+                    // Construct Verification UI
+                    const text = `⚠️ <b>Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:</b>\n\n` +
+                        missing.map(m => `• ${m.title}`).join('\n');
 
-                            await bot.answerCallbackQuery(id, {
-                                url: redirectUrl,
-                                cache_time: 0
-                            });
-                            return;
-                        } catch (e) {
-                            console.error(`[Vote] Redirect Failed for ${userId}:`, e.message);
+                    const buttons = missing.map(m => {
+                        return [{ text: `➕ ${m.title} ga qo'shilish`, url: m.url || `https://t.me/${m.title.replace('@', '')}` }];
+                    });
 
-                            // Last Resort Fallback: Just tell them nicely
-                            await bot.answerCallbackQuery(id, {
-                                text: `⚠️ Ovoz berish uchun kanallarga obuna bo'ling!`,
-                                show_alert: true,
-                                cache_time: 0
-                            });
-                            return;
-                        }
-                    } else {
-                        console.error('[Vote] Bot Username missing!');
-                        await bot.answerCallbackQuery(id, {
-                            text: `⚠️ Iltimos, kanalga obuna bo'ling.`,
-                            show_alert: true
-                        });
-                        return;
-                    }
+                    // Add "Check Membership" button with Unique ID to force re-check
+                    // We use 'check_verify:POLL_ID' which is handled in index.js
+                    buttons.push([{ text: '✅ Tekshirish (Check Membership)', callback_data: `check_verify:${pollId}` }]);
+
+                    // We cannot just "redirect". We must show this UI.
+                    // Option 1: Edit the message? No, that destroys the poll UI.
+                    // Option 2: Send a new ephemeral message? 
+                    // Option 3: Answer with text? 
+                    // Prompt says "Send message... [Join] [Check]".
+                    // So we will Send Message.
+
+                    await bot.sendMessage(message.chat.id, text, {
+                        parse_mode: 'HTML',
+                        reply_markup: { inline_keyboard: buttons },
+                        reply_to_message_id: message.message_id
+                    });
+
+                    // Answer the original click to stop loading animation
+                    return bot.answerCallbackQuery(id, { text: '⚠️ Avval kanallarga a\'zo bo\'ling!', show_alert: true, cache_time: 0 });
                 }
             }
-
-            // Time Check
-            const now = new Date();
-            const start = poll.start_time ? new Date(poll.start_time) : null;
-            const end = poll.end_time ? new Date(poll.end_time) : null;
-
-            if (start && now < start) {
-                return bot.answerCallbackQuery(id, { text: `⏳ Sorovnoma ${Math.ceil((start - now) / 60000)} daqiqadan keyin boshlanadi.`, show_alert: true });
-            }
-            if (end && now > end) {
-                return bot.answerCallbackQuery(id, { text: '🔒 Sorovnoma yopilgan.', show_alert: true });
-            }
-
-            // --- TRANSACTIONAL VOTING LOGIC ---
-            // We define the transaction
-            const executeVoteTransaction = db.transaction(() => {
-                const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
-                const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
-
-                let message = 'Ovoz qabul qilindi';
-
-                if (existingVote) {
-                    // Remove Vote
-                    if (settings.allow_edit || settings.multiple_choice) {
-                        db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
-                        message = 'Ovoz olib tashlandi ↩️';
-                    } else {
-                        throw new Error('Ovozni ozgartira olmaysiz.');
-                    }
-                } else {
-                    // Add Vote
-                    if (!settings.multiple_choice && userVotes.length > 0) {
-                        // Single choice, already voted
-                        if (settings.allow_edit) {
-                            // Switch vote
-                            db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
-                            message = 'Ovoz ozgartirildi 🔄';
-                        } else {
-                            throw new Error('Faqat bitta variant tanlash mumkin.');
-                        }
-                    }
-                    db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
-                }
-                return message;
-            });
-
-            // Execute Transaction
-            let successMessage;
-            try {
-                successMessage = executeVoteTransaction();
-            } catch (txError) {
-                // Logic errors inside transaction (like "can't edit")
-                return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
-            }
-
-            // Send Success Toast
-            bot.answerCallbackQuery(id, { text: successMessage });
-
-            // Queue UI Update
-            const chatId = message ? message.chat.id : null;
-            const messageId = message ? message.message_id : null;
-            const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
-
-            if (!updateQueue.has(key)) {
-                updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id });
-            }
-
-        } catch (error) {
-            console.error('Vote Error:', error);
-            try { bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi' }); } catch (e) { }
         }
+
+        // Time Check
+        const now = new Date();
+        const start = poll.start_time ? new Date(poll.start_time) : null;
+        const end = poll.end_time ? new Date(poll.end_time) : null;
+
+        if (start && now < start) {
+            return bot.answerCallbackQuery(id, { text: `⏳ Sorovnoma ${Math.ceil((start - now) / 60000)} daqiqadan keyin boshlanadi.`, show_alert: true });
+        }
+        if (end && now > end) {
+            return bot.answerCallbackQuery(id, { text: '🔒 Sorovnoma yopilgan.', show_alert: true });
+        }
+
+        // --- TRANSACTIONAL VOTING LOGIC ---
+        // We define the transaction
+        const executeVoteTransaction = db.transaction(() => {
+            const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
+            const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
+
+            let message = 'Ovoz qabul qilindi';
+
+            if (existingVote) {
+                // Remove Vote
+                if (settings.allow_edit || settings.multiple_choice) {
+                    db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
+                    message = 'Ovoz olib tashlandi ↩️';
+                } else {
+                    throw new Error('Ovozni ozgartira olmaysiz.');
+                }
+            } else {
+                // Add Vote
+                if (!settings.multiple_choice && userVotes.length > 0) {
+                    // Single choice, already voted
+                    if (settings.allow_edit) {
+                        // Switch vote
+                        db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
+                        message = 'Ovoz ozgartirildi 🔄';
+                    } else {
+                        throw new Error('Faqat bitta variant tanlash mumkin.');
+                    }
+                }
+                db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
+            }
+            return message;
+        });
+
+        // Execute Transaction
+        let successMessage;
+        try {
+            successMessage = executeVoteTransaction();
+        } catch (txError) {
+            // Logic errors inside transaction (like "can't edit")
+            return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
+        }
+
+        // Send Success Toast
+        bot.answerCallbackQuery(id, { text: successMessage });
+
+        // Queue UI Update
+        const chatId = message ? message.chat.id : null;
+        const messageId = message ? message.message_id : null;
+        const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
+
+        if (!updateQueue.has(key)) {
+            updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id });
+        }
+
+    } catch (error) {
+        console.error('Vote Error:', error);
+        try { bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi' }); } catch (e) { }
     }
+}
 
 async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null) {
-        const content = generatePollContent(pollId);
-        if (!content) return;
+    const content = generatePollContent(pollId);
+    if (!content) return;
 
-        const { caption, reply_markup } = content;
+    const { caption, reply_markup } = content;
 
-        try {
-            if (inlineMessageId) {
-                await bot.editMessageCaption(caption, { inline_message_id: inlineMessageId, reply_markup });
-            } else if (chatId && messageId) {
-                await bot.editMessageCaption(caption, { chat_id: chatId, message_id: messageId, reply_markup });
-            }
-        } catch (e) {
-            // Fallback for text messages
-            if (e.message.includes('there is no caption') || e.message.includes('message is not modified')) {
-                if (e.message.includes('message is not modified')) return;
+    try {
+        if (inlineMessageId) {
+            await bot.editMessageCaption(caption, { inline_message_id: inlineMessageId, reply_markup });
+        } else if (chatId && messageId) {
+            await bot.editMessageCaption(caption, { chat_id: chatId, message_id: messageId, reply_markup });
+        }
+    } catch (e) {
+        // Fallback for text messages
+        if (e.message.includes('there is no caption') || e.message.includes('message is not modified')) {
+            if (e.message.includes('message is not modified')) return;
 
-                try {
-                    if (inlineMessageId) {
-                        await bot.editMessageText(caption, { inline_message_id: inlineMessageId, reply_markup });
-                    } else if (chatId && messageId) {
-                        await bot.editMessageText(caption, { chat_id: chatId, message_id: messageId, reply_markup });
-                    }
-                } catch (innerError) { /* ignore */ }
-            }
+            try {
+                if (inlineMessageId) {
+                    await bot.editMessageText(caption, { inline_message_id: inlineMessageId, reply_markup });
+                } else if (chatId && messageId) {
+                    await bot.editMessageText(caption, { chat_id: chatId, message_id: messageId, reply_markup });
+                }
+            } catch (innerError) { /* ignore */ }
         }
     }
+}
 
-    async function sendPoll(bot, chatId, pollId) {
-        const content = generatePollContent(pollId);
-        if (!content) return false;
+async function sendPoll(bot, chatId, pollId) {
+    const content = generatePollContent(pollId);
+    if (!content) return false;
 
-        const { caption, reply_markup, poll } = content;
+    const { caption, reply_markup, poll } = content;
 
-        try {
-            if (poll.media_type === 'photo') {
-                await bot.sendPhoto(chatId, poll.media_id, { caption, reply_markup });
-            } else if (poll.media_type === 'video') {
-                await bot.sendVideo(chatId, poll.media_id, { caption, reply_markup });
-            } else {
-                await bot.sendMessage(chatId, caption, { reply_markup });
-            }
-            return true;
-        } catch (e) {
-            console.error('Error sending poll:', e.message);
-            return false;
+    try {
+        if (poll.media_type === 'photo') {
+            await bot.sendPhoto(chatId, poll.media_id, { caption, reply_markup });
+        } else if (poll.media_type === 'video') {
+            await bot.sendVideo(chatId, poll.media_id, { caption, reply_markup });
+        } else {
+            await bot.sendMessage(chatId, caption, { reply_markup });
         }
+        return true;
+    } catch (e) {
+        console.error('Error sending poll:', e.message);
+        return false;
     }
+}
 
-    module.exports = { handleVote, updatePollMessage, sendPoll, generatePollContent, checkChannelMembership };
+module.exports = { handleVote, updatePollMessage, sendPoll, generatePollContent, checkChannelMembership };

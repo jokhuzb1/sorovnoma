@@ -48,6 +48,8 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS required_channels (
         poll_id INTEGER,
         channel_username TEXT,
+        channel_id INTEGER,
+        channel_title TEXT,
         FOREIGN KEY(poll_id) REFERENCES polls(id) ON DELETE CASCADE
     );
 
@@ -66,7 +68,9 @@ const migrations = [
     'ALTER TABLE polls ADD COLUMN notified INTEGER DEFAULT 0',
     "ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'admin'",
     'ALTER TABLE polls ADD COLUMN creator_id INTEGER',
-    'ALTER TABLE polls ADD COLUMN published INTEGER DEFAULT 0'
+    'ALTER TABLE polls ADD COLUMN published INTEGER DEFAULT 0',
+    'ALTER TABLE required_channels ADD COLUMN channel_id INTEGER',
+    'ALTER TABLE required_channels ADD COLUMN channel_title TEXT'
 ];
 
 migrations.forEach(query => {
