@@ -1028,49 +1028,65 @@ console.log('[System] Bot is ready and running.');
 
 // --- MEDIA LISTENERS (For Drafts) ---
 const webAppUrl = 'https://sorovnoma.freeddns.org';
-const miniAppButton = {
-    inline_keyboard: [[
-        { text: "📲 Sorovnoma Yaratishni Boshlash", web_app: { url: webAppUrl } }
-    ]]
-};
+
+async function sendMediaDraftResponse(bot, msg, mediaType, fileId) {
+    const chatId = msg.chat.id;
+    const chatType = msg.chat.type;
+
+    // Save draft
+    try {
+        saveDraft(msg.from.id, mediaType, fileId);
+    } catch (e) {
+        console.error('Draft Save Error:', e);
+    }
+
+    let reply_markup;
+
+    if (chatType === 'private') {
+        reply_markup = {
+            inline_keyboard: [[
+                { text: "📲 Sorovnoma Yaratishni Boshlash", web_app: { url: webAppUrl } }
+            ]]
+        };
+    } else {
+        // Group/Channel: Sending web_app button here causes BUTTON_TYPE_INVALID
+        // Send a deep link to the bot instead
+        reply_markup = {
+            inline_keyboard: [[
+                { text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }
+            ]]
+        };
+    }
+
+    const text = mediaType === 'video'
+        ? '✅ Video qabul qilindi! Endi davom etishingiz mumkin:'
+        : '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:';
+
+    try {
+        await bot.sendMessage(chatId, text, { reply_markup });
+    } catch (e) {
+        console.error(`[CRITICAL] Failed to send draft response to ${chatId}:`, e.message);
+    }
+}
 
 bot.on('photo', (msg) => {
     if (!isAdmin(msg.from.id)) return;
     const photo = msg.photo[msg.photo.length - 1]; // Largest
-    saveDraft(msg.from.id, 'photo', photo.file_id);
-    const isPrivate = msg.chat.type === 'private';
-    const reply_markup = isPrivate ? miniAppButton : {
-        inline_keyboard: [[{ text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }]]
-    };
-
-    bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
+    sendMediaDraftResponse(bot, msg, 'photo', photo.file_id);
 });
 
 bot.on('video', (msg) => {
     if (!isAdmin(msg.from.id)) return;
-    saveDraft(msg.from.id, 'video', msg.video.file_id);
-
-    const isPrivate = msg.chat.type === 'private';
-    const reply_markup = isPrivate ? miniAppButton : {
-        inline_keyboard: [[{ text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }]]
-    };
-
-    bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
+    sendMediaDraftResponse(bot, msg, 'video', msg.video.file_id);
 });
 
 bot.on('document', (msg) => {
     if (!isAdmin(msg.from.id)) return;
-
-    const isPrivate = msg.chat.type === 'private';
-    const reply_markup = isPrivate ? miniAppButton : {
-        inline_keyboard: [[{ text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }]]
-    };
+    if (!msg.document || !msg.document.mime_type) return;
 
     if (msg.document.mime_type.startsWith('video/')) {
-        saveDraft(msg.from.id, 'video', msg.document.file_id);
-        bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
+        sendMediaDraftResponse(bot, msg, 'video', msg.document.file_id);
     } else if (msg.document.mime_type.startsWith('image/')) {
-        saveDraft(msg.from.id, 'photo', msg.document.file_id);
-        bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
+        sendMediaDraftResponse(bot, msg, 'photo', msg.document.file_id);
     }
 });
