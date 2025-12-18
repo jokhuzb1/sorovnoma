@@ -99,7 +99,7 @@ function generatePollContent(pollId) {
 
 const updateQueue = new Map();
 
-// Process Queue every 1.5 seconds (Faster updates)
+// Process Queue Instantly or Very Fast (200ms)
 setInterval(async () => {
     if (updateQueue.size === 0) return;
 
@@ -107,15 +107,8 @@ setInterval(async () => {
     const updates = Array.from(updateQueue.values());
     updateQueue.clear();
 
-    // console.log(`[BATCH] Processing ${updates.length} UI updates...`);
-
-    // Process in chunks to avoid hitting Telegram burst limits too hard, but faster than serial
-    // Telegram generally allows ~30 msgs/sec broad broadcast, but editing same message is limited.
-    // Since these are likely DIFFERENT messages (different users/chats), safe to parallelism.
-
-    // We'll limit concurrency to 5 at a time
     const chunk = (arr, size) => Array.from({ length: Math.ceil(arr.length / size) }, (v, i) => arr.slice(i * size, i * size + size));
-    const batches = chunk(updates, 5);
+    const batches = chunk(updates, 10); // Higher concurrency: 10
 
     for (const batch of batches) {
         await Promise.all(batch.map(u =>
@@ -124,28 +117,32 @@ setInterval(async () => {
         ));
     }
 
-}, 1500);
+}, 200);
 
 const processingCache = new Set();
+const throttleTime = 200; // 200ms: Bare minimum to prevent accidental double-clicks
 
-async function handleVote(bot, query, botUsername) {
-    const { id, data, message, from, inline_message_id } = query;
+async function handleVote(bot, query) {
+    const { id, from, data, message, inline_message_id } = query;
     const userId = from.id;
 
-    // Input Debouncing (UI Level) - Check FIRST for speed
-    const uniqueKey = `${userId}:${data}`;
+    const [_, strPollId] = data.split(':'); // Extract pollId string for throttling
 
-    if (processingCache.has(uniqueKey)) {
-        return bot.answerCallbackQuery(id); // Silent debounce
+    // Throttle per User per Poll to allow voting on different polls
+    const throttleKey = `${userId}:${strPollId}`;
+
+    if (processingCache.has(throttleKey)) {
+        // Silent ignore or toast
+        return bot.answerCallbackQuery(id); // Silent
     }
-    processingCache.add(uniqueKey);
-    setTimeout(() => processingCache.delete(uniqueKey), 1000); // 1 Second throttle
+    processingCache.add(throttleKey);
+    setTimeout(() => processingCache.delete(throttleKey), throttleTime); // 1 Second throttle
 
     try {
-        const [type, strPollId, strOptionId] = data.split(':');
+        const [type, pollIdStr, optionIdStr] = data.split(':');
         /* FORCE INT */
-        const pollId = parseInt(strPollId, 10);
-        const optionId = parseInt(strOptionId, 10);
+        const pollId = parseInt(pollIdStr, 10);
+        const optionId = parseInt(optionIdStr, 10);
 
         // HANDLE REFRESH
         if (type === 'refresh') {
