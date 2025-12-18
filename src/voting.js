@@ -111,6 +111,13 @@ async function handleVote(bot, query, botUsername) {
         const pollId = parseInt(pollIdStr, 10);
         const optionId = parseInt(optionIdStr, 10);
 
+        // IMPLEMENT HANDLE REFRESH LOCALLY
+        const handleRefresh = async (bot, message, pollId, inline_message_id) => {
+            const chatId = message ? message.chat.id : null;
+            const messageId = message ? message.message_id : null;
+            await updatePollMessage(bot, chatId, messageId, pollId, inline_message_id);
+        };
+
         // HANDLE REFRESH
         if (type === 'refresh') {
             await handleRefresh(bot, message, pollId, inline_message_id);
@@ -139,7 +146,15 @@ async function handleVote(bot, query, botUsername) {
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
                 if (missing.length > 0) {
-                    // Construct Verification UI
+
+                    // Fallback for Inline Results (where 'message' is undefined)
+                    if (!message || !message.chat) {
+                        const missingTitles = missing.map(m => `• ${m.title}`).join('\n');
+                        const alertText = `⚠️ Ovoz berish uchun kanallarga a'zo bo'ling:\n\n${missingTitles}\n\nA'zo bo'lgach, qayta urining.`;
+                        return bot.answerCallbackQuery(id, { text: alertText.substring(0, 200), show_alert: true, cache_time: 0 });
+                    }
+
+                    // Construct Verification UI for Chat Messages
                     const text = `⚠️ <b>Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:</b>\n\n` +
                         missing.map(m => `• ${m.title}`).join('\n');
 
