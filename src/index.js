@@ -519,12 +519,18 @@ bot.onText(/\/newpoll/, (msg) => {
 
     const webAppUrl = 'https://sorovnoma.freeddns.org';
 
-    bot.sendMessage(chatId, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nQuyidagi tugmani bosib, sorovnoma yaratish oynasini oching:', {
+    bot.sendMessage(chatId, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nAvval media fayl yuklaysizmi yoki birdaniga boshlaysizmi?', {
         parse_mode: 'HTML',
         reply_markup: {
-            inline_keyboard: [[
-                { text: "📲 Sorovnoma Yaratish (Mini App)", web_app: { url: webAppUrl } }
-            ]]
+            inline_keyboard: [
+                [
+                    { text: "� Rasm", callback_data: "newpoll:photo" },
+                    { text: "🎥 Video", callback_data: "newpoll:video" }
+                ],
+                [
+                    { text: "⏭️ O'tkazib yuborish (Skip)", callback_data: "newpoll:skip" }
+                ]
+            ]
         }
     });
 });
@@ -686,7 +692,28 @@ bot.onText(/\/startpoll (\d+)/, (msg, match) => {
 bot.on('callback_query', async (query) => {
     const { from, data, message } = query;
 
-    if (data.startsWith('wiz_')) {
+    if (data.startsWith('newpoll:')) {
+        const type = data.split(':')[1];
+        const webAppUrl = 'https://sorovnoma.freeddns.org';
+
+        if (type === 'skip') {
+            bot.sendMessage(message.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nBoshlash uchun tugmani bosing:', {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: "📲 Sorovnoma Yaratish (Mini App)", web_app: { url: webAppUrl } }
+                    ]]
+                }
+            });
+            bot.answerCallbackQuery(query.id);
+        } else if (type === 'photo') {
+            bot.sendMessage(message.chat.id, '📸 Iltimos, <b>Rasm</b> yuboring:');
+            bot.answerCallbackQuery(query.id);
+        } else if (type === 'video') {
+            bot.sendMessage(message.chat.id, '🎥 Iltimos, <b>Video</b> yuboring:');
+            bot.answerCallbackQuery(query.id);
+        }
+    } else if (data.startsWith('wiz_')) {
         handleWizardCallback(bot, query);
     } else if (data.startsWith('admin:')) {
         const parts = data.split(':');
@@ -971,26 +998,33 @@ process.on('unhandledRejection', (reason, promise) => {
 console.log('[System] Bot is ready and running.');
 
 // --- MEDIA LISTENERS (For Drafts) ---
+const webAppUrl = 'https://sorovnoma.freeddns.org';
+const miniAppButton = {
+    inline_keyboard: [[
+        { text: "📲 Sorovnoma Yaratishni Boshlash", web_app: { url: webAppUrl } }
+    ]]
+};
+
 bot.on('photo', (msg) => {
     if (!isAdmin(msg.from.id)) return;
     const photo = msg.photo[msg.photo.length - 1]; // Largest
     saveDraft(msg.from.id, 'photo', photo.file_id);
-    bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi "Yangi Sorovnoma" yaratishda bu rasmdan foydalanishingiz mumkin.');
+    bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
 });
 
 bot.on('video', (msg) => {
     if (!isAdmin(msg.from.id)) return;
     saveDraft(msg.from.id, 'video', msg.video.file_id);
-    bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi "Yangi Sorovnoma" yaratishda bu videodan foydalanishingiz mumkin.');
+    bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
 });
 
 bot.on('document', (msg) => {
     if (!isAdmin(msg.from.id)) return;
     if (msg.document.mime_type.startsWith('video/')) {
         saveDraft(msg.from.id, 'video', msg.document.file_id);
-        bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! (Document)');
+        bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
     } else if (msg.document.mime_type.startsWith('image/')) {
         saveDraft(msg.from.id, 'photo', msg.document.file_id);
-        bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! (Document)');
+        bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
     }
 });

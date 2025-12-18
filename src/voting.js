@@ -126,7 +126,7 @@ setInterval(async () => {
 
 }, 1500);
 
-const processingCache = new Map();
+const processingCache = new Set();
 
 async function handleVote(bot, query, botUsername) {
     const { id, data, message, from, inline_message_id } = query;
@@ -134,21 +134,12 @@ async function handleVote(bot, query, botUsername) {
 
     // Input Debouncing (UI Level) - Check FIRST for speed
     const uniqueKey = `${userId}:${data}`;
-    const nowCheck = Date.now();
 
-    // Check if recently processed (Simple Throttle)
     if (processingCache.has(uniqueKey)) {
-        const lastTime = processingCache.get(uniqueKey);
-        if (nowCheck - lastTime < 3000) { // 3 Seconds
-            return bot.answerCallbackQuery(id, { text: '⏳ Iltimos kuting, so\'rov qayta ishlanmoqda...', show_alert: true });
-        }
+        return bot.answerCallbackQuery(id); // Silent debounce
     }
-    processingCache.set(uniqueKey, nowCheck);
-
-    // Auto cleanup old keys every minute (implemented globally or locally)
-    // We'll rely on the global Interval cleanup if map is large, or just simple Map usage for now.
-    // For simplicity, let's keep it simple.
-    setTimeout(() => processingCache.delete(uniqueKey), 3000); // Clear after 3s
+    processingCache.add(uniqueKey);
+    setTimeout(() => processingCache.delete(uniqueKey), 1000); // 1 Second throttle
 
     try {
         const [type, strPollId, strOptionId] = data.split(':');
@@ -186,8 +177,8 @@ async function handleVote(bot, query, botUsername) {
                 if (missing.length > 0) {
                     if (botUsername) {
                         try {
+                            console.log(`[Vote] Redirecting ${userId} to ${botUsername} (verify_${pollId})`);
                             // Deep Link Redirect to Bot PM
-                            // User requested: "make it to forward to bot"
                             return bot.answerCallbackQuery(id, {
                                 url: `https://t.me/${botUsername}?start=verify_${pollId}`,
                                 cache_time: 2
@@ -195,11 +186,13 @@ async function handleVote(bot, query, botUsername) {
                         } catch (e) {
                             console.error('Deep link redirect failed:', e.message);
                         }
+                    } else {
+                        console.error('[Vote] Bot Username missing!');
                     }
 
                     // Fallback (or if botUsername missing): Alert
                     return bot.answerCallbackQuery(id, {
-                        text: `❌ Ovoz berish uchun kanalga a'zo bo'ling! (Join Channel First)`,
+                        text: `❌ Ovoz berish uchun kanalga a'zo bo'ling!`,
                         show_alert: true,
                         cache_time: 2
                     });
