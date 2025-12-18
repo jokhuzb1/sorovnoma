@@ -10,6 +10,7 @@ const { startWizard, handleWizardStep, handleWizardCallback } = require('./wizar
 const { handleVote, sendPoll, checkChannelMembership, generatePollContent } = require('./voting');
 
 const { isAdmin, isSuperAdmin, handleAdminCallback, SUPER_ADMINS } = require('./admin');
+const { saveDraft, getDraft } = require('./drafts');
 
 // Validate Environment
 if (!process.env.BOT_TOKEN) {
@@ -55,6 +56,18 @@ const upload = multer({ storage });
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 // --- API ROUTES ---
+
+// Draft Media Endpoint
+app.get('/api/draft-media', (req, res) => {
+    const userId = req.query.user_id;
+    if (!userId) return res.json({ media: null });
+
+    // Parse int safe
+    const uid = parseInt(userId);
+    const draft = getDraft(uid);
+    res.json({ media: draft });
+});
+
 app.post('/api/create-poll', upload.single('media'), async (req, res) => {
     try {
         const { question, options, multiple_choice, allow_edit, start_time, end_time, channels, user_id } = req.body;
@@ -140,15 +153,15 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
                 }
             } catch (e) {
                 console.error('[API] Media upload failed:', e.message);
-                // We choose to continue without media if upload fails, 
-                // OR you could reject the poll. For now, warn user but continue? 
-                // Better to fail if user expected image.
-                // return res.status(500).json({ success: false, message: 'Media yuklashda xatolik: ' + e.message });
-                // Let's fallback to no media to avoid blocking, but log it.
             } finally {
                 // Always clean up temp file
                 if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
             }
+        } else if (req.body.media_id && req.body.media_type) {
+            // Direct Media ID from Draft/Chat
+            mediaId = req.body.media_id;
+            mediaType = req.body.media_type;
+            console.log(`[API] Using existing media_id: ${mediaId} (${mediaType})`);
         }
 
         // Double check strict types for DB
@@ -956,3 +969,28 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 console.log('[System] Bot is ready and running.');
+
+// --- MEDIA LISTENERS (For Drafts) ---
+bot.on('photo', (msg) => {
+    if (!isAdmin(msg.from.id)) return;
+    const photo = msg.photo[msg.photo.length - 1]; // Largest
+    saveDraft(msg.from.id, 'photo', photo.file_id);
+    bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi "Yangi Sorovnoma" yaratishda bu rasmdan foydalanishingiz mumkin.');
+});
+
+bot.on('video', (msg) => {
+    if (!isAdmin(msg.from.id)) return;
+    saveDraft(msg.from.id, 'video', msg.video.file_id);
+    bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi "Yangi Sorovnoma" yaratishda bu videodan foydalanishingiz mumkin.');
+});
+
+bot.on('document', (msg) => {
+    if (!isAdmin(msg.from.id)) return;
+    if (msg.document.mime_type.startsWith('video/')) {
+        saveDraft(msg.from.id, 'video', msg.document.file_id);
+        bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! (Document)');
+    } else if (msg.document.mime_type.startsWith('image/')) {
+        saveDraft(msg.from.id, 'photo', msg.document.file_id);
+        bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! (Document)');
+    }
+});

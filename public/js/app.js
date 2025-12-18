@@ -34,6 +34,30 @@ fileInput.addEventListener('change', (e) => {
     }
 });
 
+// Draft Media Logic
+let draftMedia = null;
+
+// Auto-Run on Init
+if (tg.initDataUnsafe?.user?.id) {
+    const userId = tg.initDataUnsafe.user.id;
+    fetch(`/api/draft-media?user_id=${userId}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.media) {
+                draftMedia = data.media;
+                // Update UI
+                const typeName = draftMedia.type === 'video' ? 'Video' : 'Rasm';
+                fileLabel.innerHTML = `✅ <b>${typeName} biriktirildi</b> (Chatdan olindi)`;
+                fileLabel.className = 'w-full p-4 border-2 border-green-500 border-dashed rounded-xl text-center text-green-600 bg-green-50 cursor-not-allowed';
+                fileInput.disabled = true; // Disable manual upload if draft exists
+
+                // Add Reset Button (Optional, but good for UX)
+                // For now, simplicity: if they want to change, they send new media to bot or just use this.
+            }
+        })
+        .catch(err => console.error('Draft Check Failed:', err));
+}
+
 // Submit Logic
 submitBtn.addEventListener('click', async () => {
     const form = document.getElementById('pollForm');
@@ -44,6 +68,12 @@ submitBtn.addEventListener('click', async () => {
     if (user) {
         formData.append('user_id', user.id);
         formData.append('first_name', user.first_name);
+
+        // Inject Draft Media if available
+        if (draftMedia) {
+            formData.append('media_id', draftMedia.id);
+            formData.append('media_type', draftMedia.type);
+        }
     } else {
         // Fallback or error if not in Telegram (shouldn't happen in Prod but for safety)
         tg.showAlert('Foydalanuvchi aniqlanmadi (User Not Found)');
