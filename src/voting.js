@@ -163,7 +163,7 @@ async function handleVote(bot, query, botUsername) {
         const settings = JSON.parse(poll.settings_json || '{}');
         const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
 
-        console.log(`[Vote] Required Channels: ${requiredChannels.join(', ')}`);
+        // console.log(`[Vote] Required Channels: ${requiredChannels.join(', ')}`);
 
         // Gatekeeping Check (Async - outside transaction)
         if (requiredChannels.length > 0) {
@@ -172,7 +172,7 @@ async function handleVote(bot, query, botUsername) {
             if (!SUPER_ADMINS.includes(userId)) {
                 // Check membership (Fast with Cache)
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
-                console.log(`[Vote] Missing Channels: ${missing.join(', ')}`);
+                // console.log(`[Vote] Missing Channels: ${missing.join(', ')}`);
 
                 if (missing.length > 0) {
                     if (botUsername) {
