@@ -110,27 +110,26 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             const raw = String(channels).split(',').map(c => c.trim().replace(/^@/, '')).filter(c => c.length > 0);
 
             for (const ch of raw) {
-                const chat = await bot.getChat('@' + ch);
-                if (chat.type !== 'channel' && chat.type !== 'supergroup') {
-                    return res.status(400).json({ success: false, message: `❌ @${ch} kanal yoki guruh emas!` });
-                }
-                // verify admin rights? bot.getChatMember(chat.id, bot.id)? 
-                // getChat doesn't return member status of bot itself easily without another call.
-                // But if we can see it, we assume we are okay for now? 
-                // Instructions say: "Reject channel if Bot is not admin"
                 try {
-                    const me = await bot.getChatMember(chat.id, (await bot.getMe()).id);
-                    if (!['administrator', 'creator'].includes(me.status)) {
-                        return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalida admin emas!` });
+                    const chat = await bot.getChat('@' + ch);
+                    if (chat.type !== 'channel' && chat.type !== 'supergroup') {
+                        return res.status(400).json({ success: false, message: `❌ @${ch} kanal yoki guruh emas!` });
                     }
-                } catch (adminError) {
-                    return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalida admin emas! (Tekshirishda xatolik)` });
-                }
+                    // verify admin rights
+                    try {
+                        const me = await bot.getChatMember(chat.id, (await bot.getMe()).id);
+                        if (!['administrator', 'creator'].includes(me.status)) {
+                            return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalida admin emas!` });
+                        }
+                    } catch (adminError) {
+                        return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalida admin emas! (Tekshirishda xatolik)` });
+                    }
 
-                validChannels.push('@' + ch);
-            } catch (e) {
-                console.warn(`[API] Invalid Channel ${ch}: ${e.message}`);
-                return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalini topa olmadi yoki a'zo emas!` });
+                    validChannels.push('@' + ch);
+                } catch (e) {
+                    console.warn(`[API] Invalid Channel ${ch}: ${e.message}`);
+                    return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanalini topa olmadi yoki a'zo emas!` });
+                }
             }
         }
     }
