@@ -9,6 +9,7 @@ if (!fs.existsSync(dataDir)) {
 }
 
 const db = new Database(path.join(dataDir, 'voting.db'));
+db.pragma('foreign_keys = ON');
 
 // Initialize Schema
 db.exec(`
@@ -18,9 +19,12 @@ db.exec(`
         media_type TEXT,
         description TEXT,
         settings_json TEXT,
-        start_time DATETIME,
-        end_time DATETIME,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        start_time INTEGER,
+        end_time INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        creator_id INTEGER,
+        published INTEGER DEFAULT 0,
+        notified INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS options (
@@ -49,16 +53,19 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS admins (
         user_id INTEGER PRIMARY KEY,
         added_by INTEGER,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        role TEXT DEFAULT 'admin'
     );
 `);
 
 // Migration for existing tables (run independently)
 const migrations = [
-    'ALTER TABLE polls ADD COLUMN start_time DATETIME',
-    'ALTER TABLE polls ADD COLUMN end_time DATETIME',
+    // 'ALTER TABLE polls ADD COLUMN start_time INTEGER', // Now in CREATE TABLE
+    // 'ALTER TABLE polls ADD COLUMN end_time INTEGER',
     'ALTER TABLE polls ADD COLUMN notified INTEGER DEFAULT 0',
-    "ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'admin'"
+    "ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'admin'",
+    'ALTER TABLE polls ADD COLUMN creator_id INTEGER',
+    'ALTER TABLE polls ADD COLUMN published INTEGER DEFAULT 0'
 ];
 
 migrations.forEach(query => {

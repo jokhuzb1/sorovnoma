@@ -6,6 +6,7 @@ services:
     restart: always
     volumes:
       - ./data:/usr/src/app/data
+      - ./public/uploads:/usr/src/app/public/uploads
     env_file:
       - .env
     ports:

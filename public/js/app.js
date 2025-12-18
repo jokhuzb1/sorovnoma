@@ -40,14 +40,38 @@ submitBtn.addEventListener('click', async () => {
     if (user) {
         formData.append('user_id', user.id);
         formData.append('first_name', user.first_name);
+    } else {
+        // Fallback or error if not in Telegram (shouldn't happen in Prod but for safety)
+        tg.showAlert('Foydalanuvchi aniqlanmadi (User Not Found)');
+        return;
     }
 
-    // Validation
-    const question = document.getElementById('question').value;
-    const options = Array.from(document.querySelectorAll('input[name="options[]"]')).map(i => i.value).filter(v => v.trim() !== '');
+    // --- Validation (Client Side) ---
+    const questionInput = document.getElementById('question');
+    const question = questionInput.value.trim();
 
-    if (!question || options.length < 2) {
-        tg.showAlert('Savol va kamida 2 ta variant yozing!');
+    // Update input value to trimmed version for UX
+    questionInput.value = question;
+
+    // Get Options and Trim
+    const optionInputs = document.querySelectorAll('input[name="options[]"]');
+    const uniqueOptions = new Set();
+
+    optionInputs.forEach(input => {
+        const val = input.value.trim();
+        if (val) uniqueOptions.add(val);
+        input.value = val; // Auto-trim in UI
+    });
+
+    const options = Array.from(uniqueOptions);
+
+    if (!question) {
+        tg.showAlert('❌ Savol yozishni unutmang!');
+        return;
+    }
+
+    if (options.length < 2) {
+        tg.showAlert('❌ Kamida 2 ta farqli variant yozing!');
         return;
     }
 
@@ -55,6 +79,12 @@ submitBtn.addEventListener('click', async () => {
     document.getElementById('loader').classList.remove('hidden');
     submitBtn.disabled = true;
     submitBtn.innerText = 'Yaratilmoqda...';
+
+    // Note: formData already contains 'options[]' from the form inputs.
+    // Since we trimmed them in the DOM (input.value = val), FormData might pick up the trimmed values 
+    // IF we re-construct it, or we rely on backend trimming.
+    // Better: Re-construct options in formData or let backend handle strict trim.
+    // We already strictly trimmed in backend.
 
     try {
         const response = await fetch('/api/create-poll', {

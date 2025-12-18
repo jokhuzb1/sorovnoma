@@ -143,7 +143,7 @@ async function handleVote(bot, query, botUsername) {
 
         if (type !== 'vote') return bot.answerCallbackQuery(id); // Just close for non-votes
 
-        // Input Debouncing
+        // Input Debouncing (UI Level)
         const uniqueKey = `${userId}:${data}`;
         if (processingCache.has(uniqueKey)) return bot.answerCallbackQuery(id);
         processingCache.add(uniqueKey);
@@ -155,7 +155,7 @@ async function handleVote(bot, query, botUsername) {
         const settings = JSON.parse(poll.settings_json || '{}');
         const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
 
-        // Gatekeeping Check
+        // Gatekeeping Check (Async - outside transaction)
         if (requiredChannels.length > 0) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
@@ -179,7 +179,7 @@ async function handleVote(bot, query, botUsername) {
             }
         }
 
-        // If we passed checks, verify time
+        // Time Check
         const now = new Date();
         const start = poll.start_time ? new Date(poll.start_time) : null;
         const end = poll.end_time ? new Date(poll.end_time) : null;
@@ -191,29 +191,46 @@ async function handleVote(bot, query, botUsername) {
             return bot.answerCallbackQuery(id, { text: '🔒 Sorovnoma yopilgan.', show_alert: true });
         }
 
-        // Vote Logic
-        const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
-        const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
+        // --- TRANSACTIONAL VOTING LOGIC ---
+        // We define the transaction
+        const executeVoteTransaction = db.transaction(() => {
+            const existingVote = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').get(pollId, userId, optionId);
+            const userVotes = db.prepare('SELECT * FROM votes WHERE poll_id = ? AND user_id = ?').all(pollId, userId);
 
-        let successMessage = 'Ovoz qabul qilindi';
+            let message = 'Ovoz qabul qilindi';
 
-        if (existingVote) {
-            if (settings.allow_edit || settings.multiple_choice) {
-                db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
-                successMessage = 'Ovoz olib tashlandi ↩️';
-            } else {
-                return bot.answerCallbackQuery(id, { text: 'Ovozni ozgartira olmaysiz.' });
-            }
-        } else {
-            if (!settings.multiple_choice && userVotes.length > 0) {
-                if (settings.allow_edit) {
-                    db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
-                    successMessage = 'Ovoz ozgartirildi 🔄';
+            if (existingVote) {
+                // Remove Vote
+                if (settings.allow_edit || settings.multiple_choice) {
+                    db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ? AND option_id = ?').run(pollId, userId, optionId);
+                    message = 'Ovoz olib tashlandi ↩️';
                 } else {
-                    return bot.answerCallbackQuery(id, { text: 'Faqat bitta variant tanlash mumkin.' });
+                    throw new Error('Ovozni ozgartira olmaysiz.');
                 }
+            } else {
+                // Add Vote
+                if (!settings.multiple_choice && userVotes.length > 0) {
+                    // Single choice, already voted
+                    if (settings.allow_edit) {
+                        // Switch vote
+                        db.prepare('DELETE FROM votes WHERE poll_id = ? AND user_id = ?').run(pollId, userId);
+                        message = 'Ovoz ozgartirildi 🔄';
+                    } else {
+                        throw new Error('Faqat bitta variant tanlash mumkin.');
+                    }
+                }
+                db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
             }
-            db.prepare('INSERT INTO votes (poll_id, user_id, option_id) VALUES (?, ?, ?)').run(pollId, userId, optionId);
+            return message;
+        });
+
+        // Execute Transaction
+        let successMessage;
+        try {
+            successMessage = executeVoteTransaction();
+        } catch (txError) {
+            // Logic errors inside transaction (like "can't edit")
+            return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
         }
 
         // Send Success Toast

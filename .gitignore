@@ -4,3 +4,7 @@ data/
 caddy_data/
 caddy_config/
 .DS_Store
+
+# Uploads
+public/uploads/*
+!public/uploads/.gitkeep

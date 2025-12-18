@@ -9,11 +9,22 @@ const fs = require('fs');
 const { startWizard, handleWizardStep, handleWizardCallback } = require('./wizard');
 const { handleVote, sendPoll, checkChannelMembership, generatePollContent } = require('./voting');
 
+const { isAdmin, isSuperAdmin, handleAdminCallback, SUPER_ADMINS } = require('./admin');
+
 // Validate Environment
 if (!process.env.BOT_TOKEN) {
     console.error('CRITICAL: BOT_TOKEN is missing in .env');
     process.exit(1);
 }
+
+// ... (Express Setup) ... 
+
+console.log(`Bot started! Super Admin IDs: ${SUPER_ADMINS.join(', ')}`);
+
+// ... (API Routes - isAdmin is now imported) ... 
+
+// ... (Bot Commands - isAdmin is now imported) ...
+
 
 // --- EXPRESS SERVER SETUP ---
 const app = express();
@@ -22,6 +33,11 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+
+app.use((req, res, next) => {
+    console.log(`[SERVER] ${req.method} ${req.url}`);
+    next();
+});
 
 // Multer Config
 const uploadDir = path.join(__dirname, '../public/uploads/');
@@ -42,108 +58,195 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 app.post('/api/create-poll', upload.single('media'), async (req, res) => {
     try {
         const { question, options, multiple_choice, allow_edit, start_time, end_time, channels, user_id } = req.body;
+        console.log('[API] Debug Body:', JSON.stringify(req.body, null, 2));
 
-        // Security Check
+        // --- 1. STRICT INPUT VALIDATION ---
+
+        // User ID (Required)
         if (!user_id || !isAdmin(parseInt(user_id))) {
             return res.status(403).json({ success: false, message: '⛔ Ruxsat berilmagan (Not Authorized)' });
         }
 
-        const file = req.file;
-        console.log('[API] New Poll Request:', req.body);
-        // ... (rest of logic) ...
+        // Question (Required, String, Not Empty)
+        const cleanQuestion = String(question || '').trim();
+        if (!cleanQuestion) {
+            return res.status(400).json({ success: false, message: '❌ Savol matni bo\'sh bo\'lishi mumkin emas!' });
+        }
 
 
-        let mediaId = null;
-        let mediaType = 'none';
+        // Options (Required, Array, Min 2, Non-empty)
+        let optionsList = [];
+        if (Array.isArray(options)) {
+            optionsList = options;
+        } else if (typeof options === 'string') {
+            optionsList = [options];
+        }
 
-        // 1. Upload Media to Telegram (to get file_id)
-        if (file && user_id) {
-            const filePath = file.path;
-            try {
-                let sentMsg;
-                // Send to the user's chat (or a temporary channel) to get file_id
-                // Note: User must have started the bot.
-                if (file.mimetype.startsWith('image/')) {
-                    sentMsg = await bot.sendPhoto(user_id, fs.createReadStream(filePath), { caption: 'Media Upload' });
-                    mediaId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
-                    mediaType = 'photo';
-                } else if (file.mimetype.startsWith('video/')) {
-                    sentMsg = await bot.sendVideo(user_id, fs.createReadStream(filePath), { caption: 'Media Upload' });
-                    mediaId = sentMsg.video.file_id;
-                    mediaType = 'video';
+        // sanitize options
+        optionsList = optionsList
+            .map(opt => String(opt || '').trim())
+            .filter(opt => opt.length > 0);
+
+        if (optionsList.length < 2) {
+            return res.status(400).json({ success: false, message: '❌ Kamida 2 ta variant kiritilishi shart!' });
+        }
+
+        // Channels Validation (Strict)
+        let validChannels = [];
+        if (channels) {
+            const raw = String(channels).split(',').map(c => c.trim().replace(/^@/, '')).filter(c => c.length > 0);
+
+            for (const ch of raw) {
+                try {
+                    // Check if bot can access the chat
+                    // Note: getChat works if bot is in chat (or public channel sometimes). 
+                    // Better: We assume user wants us to check membership, so we must be able to see it.
+                    await bot.getChat('@' + ch);
+                    validChannels.push('@' + ch);
+                } catch (e) {
+                    console.warn(`[API] Invalid Channel ${ch}: ${e.message}`);
+                    return res.status(400).json({ success: false, message: `❌ Bot @${ch} kanaliga a'zo emas yoki admin emas!` });
                 }
-
-                // Cleanup local file
-                fs.unlinkSync(filePath);
-            } catch (e) {
-                console.error('Media upload failed:', e);
-                // Continue without media if failed
             }
         }
 
-        // Explicitly stringify settings (SQLite JSON)
+        // --- 2. MEDIA HANDLING (STRICT) ---
+
+        let mediaId = null;
+        let mediaType = 'none';
+        const file = req.file;
+
+        if (file) {
+            console.log(`[API] Processing file: ${file.originalname} (${file.mimetype})`);
+            const filePath = file.path;
+            try {
+                let sentMsg;
+                // Validate mime type explicitly before sending to Telegram
+                if (file.mimetype.startsWith('image/')) {
+                    sentMsg = await bot.sendPhoto(user_id, fs.createReadStream(filePath), { caption: 'Media Upload Verification' });
+                    // Telegram photo structure: array of sizes. We take the last (largest).
+                    if (sentMsg.photo && sentMsg.photo.length > 0) {
+                        mediaId = sentMsg.photo[sentMsg.photo.length - 1].file_id;
+                        mediaType = 'photo';
+                    }
+                } else if (file.mimetype.startsWith('video/')) {
+                    sentMsg = await bot.sendVideo(user_id, fs.createReadStream(filePath), { caption: 'Media Upload Verification' });
+                    if (sentMsg.video) {
+                        mediaId = sentMsg.video.file_id;
+                        mediaType = 'video';
+                    }
+                } else {
+                    console.warn('[API] Unsupported file type:', file.mimetype);
+                }
+            } catch (e) {
+                console.error('[API] Media upload failed:', e.message);
+                // We choose to continue without media if upload fails, 
+                // OR you could reject the poll. For now, warn user but continue? 
+                // Better to fail if user expected image.
+                // return res.status(500).json({ success: false, message: 'Media yuklashda xatolik: ' + e.message });
+                // Let's fallback to no media to avoid blocking, but log it.
+            } finally {
+                // Always clean up temp file
+                if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+            }
+        }
+
+        // Double check strict types for DB
+        if (typeof mediaId !== 'string') mediaId = null;
+        if (typeof mediaType !== 'string') mediaType = 'none';
+
+        // --- 3. NORMALIZATION & DB INSERT ---
+
         const settings = JSON.stringify({
             multiple_choice: multiple_choice === 'on' || multiple_choice === 'true',
             allow_edit: allow_edit === 'on' || allow_edit === 'true'
         });
 
+        // Date Cleaning & Logic
+        let startTimeVal = null; // Stored as INTEGER (Unix Timestamp ms) or null
+        let endTimeVal = null;
+        let published = 0;
+
+        const now = Date.now();
+
+        if (start_time && start_time !== 'null' && start_time.trim() !== '') {
+            const parsed = Date.parse(start_time);
+            if (!isNaN(parsed)) {
+                startTimeVal = parsed;
+                // If start time is in the future (> now + 5 seconds buffer), it's scheduled.
+                // Otherwise it's immediate.
+                if (startTimeVal > now + 1000) {
+                    published = 0;
+                } else {
+                    published = 1;
+                }
+            }
+        } else {
+            // No start time = Immediate
+            published = 1;
+        }
+
+        if (end_time && end_time !== 'null' && end_time.trim() !== '') {
+            const parsed = Date.parse(end_time);
+            if (!isNaN(parsed)) {
+                endTimeVal = parsed;
+            }
+        }
+
         const stmt = db.prepare(`
             INSERT INTO polls (
-                media_id, media_type, description, settings_json, start_time, end_time
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                media_id, media_type, description, settings_json, start_time, end_time, creator_id, published
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
-        // Strict Date Cleaning
-        // If frontend sends "null" string, or empty string, or undefined -> convert to REAL null
-        let startTimeVal = null;
-        if (start_time && start_time !== 'null' && start_time.trim() !== '') {
-            startTimeVal = start_time;
-        }
-
-        let endTimeVal = null;
-        if (end_time && end_time !== 'null' && end_time.trim() !== '') {
-            endTimeVal = end_time;
-        }
-
+        // Execute with explicit params to avoid "undefined"
         const info = stmt.run(
-            mediaId || null,
-            mediaType || 'none',
-            String(question || ''), // Ensure question is string
-            settings, // Already stringified
-            startTimeVal,
-            endTimeVal
+            mediaId,        // can be null or string
+            mediaType,      // string
+            cleanQuestion,  // string
+            settings,       // string
+            startTimeVal,   // INTEGER or null
+            endTimeVal,     // INTEGER or null
+            user_id,        // INTEGER (creator_id)
+            published       // INTEGER (0 or 1)
         );
 
         const pollId = info.lastInsertRowid;
+        console.log(`[API] Poll created with ID: ${pollId}`);
 
-        // 3. Save Options
+        // Save Options
         const insertOption = db.prepare('INSERT INTO options (poll_id, text) VALUES (?, ?)');
-        const optionsList = Array.isArray(options) ? options : [options]; // Handle single option case
+        optionsList.forEach(opt => {
+            insertOption.run(pollId, opt);
+        });
 
-        // Fix: If options is just a string (single item array from multer sometimes)
-        if (typeof options === 'string') {
-            insertOption.run(pollId, options);
-        } else {
-            optionsList.forEach(opt => {
-                if (opt.trim()) insertOption.run(pollId, opt);
-            });
-        }
-
-        // 4. Save Channels
+        // Save Channels (Phase 3 Prep)
         if (channels) {
-            const channelList = channels.split(',').map(c => c.trim()).filter(c => c.startsWith('@'));
-            const insertChannel = db.prepare('INSERT INTO required_channels (poll_id, channel_username) VALUES (?, ?)');
-            channelList.forEach(ch => insertChannel.run(pollId, ch));
+            const channelList = String(channels)
+                .split(',')
+                .map(c => c.trim().replace(/^@/, '')) // remove starting @ if present
+                .filter(c => c.length > 0);
+
+            if (channelList.length > 0) {
+                const insertChannel = db.prepare('INSERT INTO required_channels (poll_id, channel_username) VALUES (?, ?)');
+                channelList.forEach(ch => {
+                    // Store with @ for consistency in display, or without? 
+                    // Let's store WITH @ to make it easier for bot checks later, or strictly without.
+                    // Implementation plan said "Remove @". 
+                    // Let's store sanitized username 'channelname'.
+                    insertChannel.run(pollId, '@' + ch);
+                });
+            }
         }
 
-        // 5. Send Poll to Creator
+        // Send to Creator
         await sendPoll(bot, user_id, pollId);
 
         res.json({ success: true, pollId });
 
     } catch (error) {
-        console.error('API Error:', error);
-        res.status(500).json({ success: false, message: error.message });
+        console.error('[API] Critical Error:', error);
+        res.status(500).json({ success: false, message: 'Server Xatoligi: ' + error.message });
     }
 });
 
@@ -152,30 +255,7 @@ app.listen(PORT, () => {
     console.log(`Web Server running on port ${PORT}`);
 });
 
-// Load Super Admin IDs from Env
-const SUPER_ADMINS = (process.env.ADMIN_IDS || '')
-    .split(',')
-    .map(id => parseInt(id.trim(), 10))
-    .filter(Boolean);
-
-console.log(`Bot started! Super Admin IDs: ${SUPER_ADMINS.join(', ')}`);
-
-// Middleware to check admin status
-const isSuperAdmin = (userId) => {
-    if (SUPER_ADMINS.includes(userId)) return true;
-    try {
-        const admin = db.prepare("SELECT role FROM admins WHERE user_id = ?").get(userId);
-        return admin && admin.role === 'super_admin';
-    } catch (e) { return false; }
-};
-
-const isAdmin = (userId) => {
-    if (isSuperAdmin(userId)) return true;
-    try {
-        const admin = db.prepare('SELECT user_id FROM admins WHERE user_id = ?').get(userId);
-        return !!admin;
-    } catch (e) { return false; }
-};
+// (Middleware removed - imported from admin.js)
 
 // --- Admin Management Commands ---
 
@@ -552,10 +632,66 @@ bot.on('callback_query', async (query) => {
                 bot.answerCallbackQuery(query.id);
                 sendPoll(bot, message.chat.id, pollId);
             } else if (action === 'delete') {
+                // Step 1: Request Confirmation
+                const buttons = [
+                    [
+                        { text: '✅ HA, Ochirilsin', callback_data: `admin:confirm_delete:${pollId}` },
+                        { text: '❌ Bekor qilish', callback_data: `admin:cancel_delete:${pollId}` }
+                    ]
+                ];
+
+                try {
+                    bot.editMessageText(`⚠️ **DIQQAT!**\n\nSiz rostdan ham Sorovnoma #${pollId} ni ochirmoqchimisiz?\n\n❗️ Bu amalni ortga qaytarib bolmaydi. Barcha ovozlar ochib ketadi.`, {
+                        chat_id: message.chat.id,
+                        message_id: message.message_id,
+                        parse_mode: 'Markdown',
+                        reply_markup: { inline_keyboard: buttons }
+                    });
+                } catch (e) { }
+                bot.answerCallbackQuery(query.id);
+
+            } else if (action === 'confirm_delete') {
+                // Step 2: Execute Delete (Cascade enabled in DB now)
                 db.prepare('DELETE FROM polls WHERE id = ?').run(pollId);
+
                 bot.answerCallbackQuery(query.id, { text: '🗑️ Sorovnoma ochirildi!' });
-                bot.deleteMessage(message.chat.id, message.message_id);
-                bot.sendMessage(message.chat.id, `🗑️ Sorovnoma #${pollId} ochirildi.`);
+                try {
+                    bot.deleteMessage(message.chat.id, message.message_id);
+                    bot.sendMessage(message.chat.id, `🗑️ Sorovnoma #${pollId} muvaffaqiyatli ochirildi.`);
+                } catch (e) { }
+
+            } else if (action === 'cancel_delete') {
+                // Step 3: Cancel (Restore Management View)
+                const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+                if (!poll) {
+                    bot.answerCallbackQuery(query.id, { text: 'Sorovnoma topilmadi.', show_alert: true });
+                    return bot.deleteMessage(message.chat.id, message.message_id);
+                }
+
+                const status = (poll.end_time && new Date() > new Date(poll.end_time)) ? '🔒 Yopiq' : '🟢 Ochiq';
+                const text = `⚙️ **Sorovnoma Boshqaruv**\n\n🆔 ID: ${poll.id}\n📝 ${poll.description}\n📅 Yaratilgan: ${poll.created_at}\n📊 Status: ${status}`;
+
+                const buttons = [
+                    [
+                        { text: '🟢 Boshlash', callback_data: `admin:start:${pollId}` },
+                        { text: '🛑 Toxtatish', callback_data: `admin:stop:${pollId}` }
+                    ],
+                    [
+                        { text: '📊 Natijalar', callback_data: `admin:results:${pollId}` },
+                        { text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` }
+                    ],
+                    [
+                        { text: '🗑️ Ochirish (Delete)', callback_data: `admin:delete:${pollId}` }
+                    ]
+                ];
+
+                bot.editMessageText(text, {
+                    chat_id: message.chat.id,
+                    message_id: message.message_id,
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: buttons }
+                });
+                bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' });
             }
         } catch (e) {
             console.error('Admin Action Error:', e);
@@ -688,46 +824,73 @@ bot.on('inline_query', async (query) => {
 });
 
 // ------------------------------------------------------------------
-// Background Task: Check for Expired Polls & Notify Creator
+// Background Task: Scheduler (Auto-Start & Auto-End)
 // ------------------------------------------------------------------
-setInterval(() => {
+function checkPollTimers() {
     try {
-        const now = new Date().toISOString();
-        // Find polls that ended, are not notified, and have an end_time (not null)
-        const expiredPolls = db.prepare('SELECT * FROM polls WHERE end_time IS NOT NULL AND end_time <= ? AND notified = 0').all(now);
+        const now = Date.now();
+
+        // 1. Check for Polls to START (Published = 0, Start Time passed)
+        const pendingPolls = db.prepare('SELECT * FROM polls WHERE published = 0 AND start_time IS NOT NULL AND start_time <= ?').all(now);
+
+        pendingPolls.forEach(async (poll) => {
+            console.log(`[Scheduler] Starting Poll #${poll.id}...`);
+
+            // Mark as published
+            db.prepare('UPDATE polls SET published = 1 WHERE id = ?').run(poll.id);
+
+            // Notify Creator (if we have ID)
+            if (poll.creator_id) {
+                bot.sendMessage(poll.creator_id, `🟢 **Sorovnoma Boshlandi** (#${poll.id})\n\nSorovnoma avtomatik ravishda e'lon qilindi.`, { parse_mode: 'Markdown' });
+                await sendPoll(bot, poll.creator_id, poll.id);
+            } else {
+                // Fallback: Notify Super Admins if creator unknown
+                SUPER_ADMINS.forEach(adminId => {
+                    bot.sendMessage(adminId, `🟢 **Sorovnoma Boshlandi** (#${poll.id}) (Creator Unknown)`);
+                    sendPoll(bot, adminId, poll.id);
+                });
+            }
+        });
+
+        // 2. Check for Polls to END (Notified = 0, End Time passed)
+        const expiredPolls = db.prepare('SELECT * FROM polls WHERE notified = 0 AND end_time IS NOT NULL AND end_time <= ?').all(now);
 
         expiredPolls.forEach(poll => {
-            // Retrieve Creator ID (assuming we stored it, OR send to Super Admins)
-            // Note: Our 'polls' table doesn't explicitly store creator_id in the CREATE statement above, 
-            // BUT we should have stored it. Let's check api/create-poll logic.
-            // If we didn't store creator_id, we might have trouble knowing who to notify, 
-            // unless we assume it's one of the admins. 
-            // For now, let's notify the Super Admin (first one) or if we saved user_id in settings?
-            // Wait, looking at /api/create-poll: `const { ... user_id } = req.body;`
-            // But did we save it? Let's assume we need to add creator_id if missing.
-            // Actually, for this specific request, let's just use `sendPoll` to the channel if we knew it, or just log it.
-            // BETTER: Notify the Admin who manages it.
+            console.log(`[Scheduler] Ending Poll #${poll.id}...`);
 
-            // Marking as notified first to prevent loop
+            // Mark as notified (closed)
             db.prepare('UPDATE polls SET notified = 1 WHERE id = ?').run(poll.id);
 
-            // Notify Super Admins (since we don't have explicit creator_id in schema yet, but user asked for "admin that created")
-            // Migration needed for creator_id? Yes, strictly speaking.
-            // But let's check if settings_json has it? 
-            // Allow notifying ALL Super Admins for now as fallback.
-
-            SUPER_ADMINS.forEach(adminId => {
-                bot.sendMessage(adminId, `🔔 **Sorovnoma Yakunlandi** (#${poll.id})\n\nVaqt tugadi. Natijalar:`, { parse_mode: 'Markdown' });
-                sendPoll(bot, adminId, poll.id);
-            });
+            // Notify Creator
+            if (poll.creator_id) {
+                bot.sendMessage(poll.creator_id, `🔒 **Sorovnoma Yakunlandi** (#${poll.id})\n\nVaqt tugadi. Natijalar:`, { parse_mode: 'Markdown' });
+                sendPoll(bot, poll.creator_id, poll.id);
+            } else {
+                SUPER_ADMINS.forEach(adminId => {
+                    bot.sendMessage(adminId, `🔒 **Sorovnoma Yakunlandi** (#${poll.id})`);
+                    sendPoll(bot, adminId, poll.id);
+                });
+            }
         });
+
     } catch (e) {
-        console.error('Expiry Check Error:', e.message);
+        console.error('[Scheduler] Error:', e.message);
     }
-}, 60000); // Check every minute
+}
+
+// Run Scheduler every 10 seconds
+setInterval(checkPollTimers, 10000);
 
 
 // Error Handling
-bot.on('polling_error', (error) => {
-    console.error(`[Polling Error] ${error.code}: ${error.message}`);
+// Global Error Handlers
+process.on('uncaughtException', (err) => {
+    console.error('CRITICAL: Uncaught Exception:', err);
+    // process.exit(1); // Optional: Restart via PM2/Docker usually better, but for now keep alive if possible or exit safe.
 });
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('CRITICAL: Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+console.log('[System] Bot is ready and running.');
