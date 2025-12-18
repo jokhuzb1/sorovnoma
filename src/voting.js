@@ -175,33 +175,34 @@ async function handleVote(bot, query, botUsername) {
                 console.log(`[Vote] User: ${userId}, Missing: ${missing.length > 0 ? missing.join(', ') : 'None'}`);
 
                 if (missing.length > 0) {
-                    // SMART REDIRECT STRATEGY
-                    // 1. If only 1 channel is missing, redirect DIRECTLY to that channel.
-                    // This provides the best UX (no Bot Start screen, no "Verify" button needed).
-                    if (missing.length === 1) {
-                        const channelUsername = missing[0].trim().replace(/^@/, ''); // Remove @ and whitespace
+                    if (botUsername) {
                         try {
-                            // Fallback to t.me link if tg:// falls
+                            const redirectUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
+                            // console.log(`[Vote] Redirecting ${userId} to ${redirectUrl}`);
+
                             await bot.answerCallbackQuery(id, {
-                                url: `https://t.me/${channelUsername}`,
+                                url: redirectUrl,
                                 cache_time: 0
                             });
                             return;
                         } catch (e) {
-                            console.error(`[Vote] Direct Channel Redirect Failed:`, e.message);
-                            // If specifically URL INVALID, maybe try tg:// for some clients or just fall through
-                        }
-                    }
+                            console.error(`[Vote] Redirect Failed for ${userId}:`, e.message);
 
-                    // 2. If multiple channels are missing OR direct failed, use Bot Bridge.
-                    if (botUsername) {
-                        try {
-                            console.log(`[Vote] Redirecting ${userId} to ${botUsername} (verify_${pollId})`);
+                            // Last Resort Fallback: Just tell them nicely
                             await bot.answerCallbackQuery(id, {
-                                url: `https://t.me/${botUsername}?start=verify_${pollId}`,
+                                text: `⚠️ Ovoz berish uchun kanallarga obuna bo'ling!`,
+                                show_alert: true,
                                 cache_time: 0
                             });
+                            return;
+                        }
+                    } else {
+                        console.error('[Vote] Bot Username missing!');
+                        await bot.answerCallbackQuery(id, {
+                            text: `⚠️ Iltimos, kanalga obuna bo'ling.`,
+                            show_alert: true
                         });
+                        return;
                     }
                 }
             }
