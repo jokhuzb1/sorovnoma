@@ -249,10 +249,77 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
         res.status(500).json({ success: false, message: 'Server Xatoligi: ' + error.message });
     }
 });
-
 // Start Server
 app.listen(PORT, () => {
     console.log(`Web Server running on port ${PORT}`);
+});
+
+// STARTUP: Get Bot Username
+let BOT_USERNAME = null;
+bot.getMe().then(me => {
+    BOT_USERNAME = me.username;
+    console.log(`Bot username: ${BOT_USERNAME}`);
+});
+
+// --- DEEP LINK HANDLER (Authentication Flow) ---
+bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const payload = match[1]; // content after /start
+
+    if (!payload || !payload.startsWith('verify_')) {
+        // Normal Start
+        return bot.sendMessage(chatId, '👋 Salom! Men Sorovnoma Botman.\n\nSorovnoma yaratish uchun /newpoll buyrug\'ini yuboring (Adminlar uchun).');
+    }
+
+    // Verify Payload
+    const pollId = parseInt(payload.replace('verify_', ''), 10);
+    if (isNaN(pollId)) return bot.sendMessage(chatId, '❌ Xato havolasi.');
+
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return bot.sendMessage(chatId, '❌ Sorovnoma topilmadi.');
+
+    // Check Channels
+    const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
+
+    // Perform detailed check
+    const { checkChannelMembership } = require('./voting');
+    const missing = await checkChannelMembership(bot, userId, requiredChannels);
+
+    if (missing.length === 0) {
+        return bot.sendMessage(chatId, '✅ **Siz barcha kanallarga a\'zo bo\'lgansiz!**\n\nEndi ovoz berishingiz mumkin.', { parse_mode: 'Markdown' });
+    }
+
+    const buttons = missing.map(ch => {
+        const username = ch.replace('@', '');
+        return [{ text: `➕ ${ch} ga a'zo bo'lish`, url: `https://t.me/${username}` }];
+    });
+
+    buttons.push([{ text: '✅ Tekshirish', callback_data: `check_sub:${pollId}` }]);
+
+    bot.sendMessage(chatId, `🛑 **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**`, {
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: buttons }
+    });
+});
+
+// Handle 'check_sub' callback inside bot
+bot.on('callback_query', async (query) => {
+    if (query.data.startsWith('check_sub:')) {
+        const pollId = parseInt(query.data.split(':')[1]);
+        const userId = query.from.id;
+
+        const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
+        const { checkChannelMembership } = require('./voting'); // Lazy import to avoid cycle if any
+        const missing = await checkChannelMembership(bot, userId, requiredChannels);
+
+        if (missing.length === 0) {
+            await bot.answerCallbackQuery(query.id, { text: '✅ Rahmat! Endi ovoz berishingiz mumkin.', show_alert: true });
+            await bot.sendMessage(query.message.chat.id, '✅ Muvaffaqiyatli tasdiqlandi. Ovoz berish xabariga qaytib, ovoz bering!');
+        } else {
+            await bot.answerCallbackQuery(query.id, { text: `❌ Hali ${missing.length} ta kanalga a'zo emassiz.`, show_alert: true });
+        }
+    }
 });
 
 // (Middleware removed - imported from admin.js)
@@ -459,12 +526,7 @@ bot.onText(/\/poll (\d+)/, async (msg, match) => {
 
 // ...
 
-// Global Bot Username
-let BOT_USERNAME = null;
-bot.getMe().then(me => {
-    BOT_USERNAME = me.username;
-    console.log(`Bot username: ${BOT_USERNAME}`);
-});
+// (Duplicate removed)
 
 // ...
 

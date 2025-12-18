@@ -175,31 +175,24 @@ async function handleVote(bot, query, botUsername) {
                 console.log(`[Vote] Missing Channels: ${missing.join(', ')}`);
 
                 if (missing.length > 0) {
-                    // Optimized: Send a MESSAGE with buttons immediately instead of redirecting
-                    // This is more reliable than deep links and faster for the user.
-
-                    const buttons = missing.map(ch => {
-                        const username = ch.replace('@', '');
-                        return [{ text: `➕ ${ch} ga a'zo bo'lish`, url: `https://t.me/${username}` }];
-                    });
-
-                    // Add "Verify" button
-                    buttons.push([{ text: '✅ Tekshirish (Verify)', callback_data: `refresh:${pollId}` }]); // refresh acts as verify here effectively as it re-renders/allows voting next click
-
-                    try {
-                        await bot.sendMessage(userId, `🛑 **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**`, {
-                            parse_mode: 'Markdown',
-                            reply_markup: { inline_keyboard: buttons }
-                        });
-                    } catch (e) {
-                        // If DM fails (user blocked bot?), try alert
-                        console.error('Failed to send verification DM:', e.message);
+                    if (botUsername) {
+                        try {
+                            // Deep Link Redirect to Bot PM
+                            // User requested: "make it to forward to bot"
+                            return bot.answerCallbackQuery(id, {
+                                url: `https://t.me/${botUsername}?start=verify_${pollId}`,
+                                cache_time: 2
+                            });
+                        } catch (e) {
+                            console.error('Deep link redirect failed:', e.message);
+                        }
                     }
 
+                    // Fallback (or if botUsername missing): Alert
                     return bot.answerCallbackQuery(id, {
-                        text: `❌ Siz ${missing.length} ta kanalga a'zo emassiz! Botdan xabar keldi.`,
+                        text: `❌ Ovoz berish uchun kanalga a'zo bo'ling! (Join Channel First)`,
                         show_alert: true,
-                        cache_time: 5
+                        cache_time: 2
                     });
                 }
             }
