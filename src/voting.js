@@ -147,11 +147,17 @@ async function handleVote(bot, query, botUsername) {
 
                 if (missing.length > 0) {
 
-                    // Fallback for Inline Results (where 'message' is undefined)
-                    if (!message || !message.chat) {
-                        const missingTitles = missing.map(m => `• ${m.title}`).join('\n');
-                        const alertText = `⚠️ Ovoz berish uchun kanallarga a'zo bo'ling:\n\n${missingTitles}\n\nA'zo bo'lgach, qayta urining.`;
-                        return bot.answerCallbackQuery(id, { text: alertText.substring(0, 200), show_alert: true, cache_time: 0 });
+                    // Fallback for Inline Results OR Channels/Groups => REDIRECT
+                    // Why? Groups/Channels cannot open WebApp improperly or it's spammy to send text to group.
+                    if (!message || !message.chat || message.chat.type !== 'private') {
+                        if (botUsername) {
+                            const redirectUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
+                            return bot.answerCallbackQuery(id, { url: redirectUrl, cache_time: 0 });
+                        } else {
+                            const missingTitles = missing.map(m => `• ${m.title}`).join('\n');
+                            const alertText = `⚠️ Ovoz berish uchun kanallarga a'zo bo'ling:\n\n${missingTitles}\n\nA'zo bo'lgach, qayta urining.`;
+                            return bot.answerCallbackQuery(id, { text: alertText.substring(0, 200), show_alert: true, cache_time: 0 });
+                        }
                     }
 
                     // Construct Verification UI for Chat Messages

@@ -1038,22 +1038,39 @@ bot.on('photo', (msg) => {
     if (!isAdmin(msg.from.id)) return;
     const photo = msg.photo[msg.photo.length - 1]; // Largest
     saveDraft(msg.from.id, 'photo', photo.file_id);
-    bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
+    const isPrivate = msg.chat.type === 'private';
+    const reply_markup = isPrivate ? miniAppButton : {
+        inline_keyboard: [[{ text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }]]
+    };
+
+    bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
 });
 
 bot.on('video', (msg) => {
     if (!isAdmin(msg.from.id)) return;
     saveDraft(msg.from.id, 'video', msg.video.file_id);
-    bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
+
+    const isPrivate = msg.chat.type === 'private';
+    const reply_markup = isPrivate ? miniAppButton : {
+        inline_keyboard: [[{ text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }]]
+    };
+
+    bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
 });
 
 bot.on('document', (msg) => {
     if (!isAdmin(msg.from.id)) return;
+
+    const isPrivate = msg.chat.type === 'private';
+    const reply_markup = isPrivate ? miniAppButton : {
+        inline_keyboard: [[{ text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }]]
+    };
+
     if (msg.document.mime_type.startsWith('video/')) {
         saveDraft(msg.from.id, 'video', msg.document.file_id);
-        bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
+        bot.sendMessage(msg.chat.id, '✅ Video qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
     } else if (msg.document.mime_type.startsWith('image/')) {
         saveDraft(msg.from.id, 'photo', msg.document.file_id);
-        bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup: miniAppButton });
+        bot.sendMessage(msg.chat.id, '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:', { reply_markup });
     }
 });
