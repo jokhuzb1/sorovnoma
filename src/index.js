@@ -622,16 +622,20 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
         if (param.startsWith('verify_')) {
             const pollId = param.split('_')[1];
 
-            // Show channel list
-            const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
+            // Show channel list (Strict)
+            const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
 
             if (requiredChannels.length === 0) {
                 return bot.sendMessage(chatId, '✅ Bu sorovnoma uchun majburiy kanallar yoq.');
             }
 
             const buttons = requiredChannels.map(ch => {
-                const username = ch.replace('@', '');
-                return [{ text: `➕ ${ch} ga azo bolish`, url: `https://t.me/${username}` }];
+                // Use title if available, else username
+                const display = ch.channel_title || ch.channel_username;
+                const url = ch.channel_username ? `https://t.me/${ch.channel_username.replace('@', '')}` : `https://t.me/${ch.channel_username}`; // Fallback if no username?
+                // Actually, if we resolved ID but no username? 
+                // We MUST have username or Link. Instructions say input is username/link.
+                return [{ text: `➕ ${display} ga azo bolish`, url: url }];
             });
 
             buttons.push([{ text: '✅ Tekshirish', callback_data: `check_verify:${pollId}` }]);
