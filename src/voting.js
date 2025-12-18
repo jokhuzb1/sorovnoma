@@ -2,28 +2,29 @@ const db = require('./database');
 
 // NO CACHING - STRICT CHECK
 async function checkChannelMembership(bot, userId, requiredChannels) {
-    const missing = [];
-    for (const channel of requiredChannels) {
-        // channel is object { channel_id, channel_title, channel_username }
-        // Fallback for old data: use username if id missing (but we expect IDs now)
+    // Parallelize checks to prevent "query is too old" timeouts
+    const checks = requiredChannels.map(async (channel) => {
         const target = channel.channel_id || channel.channel_username;
         const title = channel.channel_title || channel.channel_username;
 
         try {
-            console.log(`[channel_check] Poll: ${channel.poll_id} | User: ${userId} | Channel: ${target}`);
+            console.log(`[channel_check] Checking ${target} for ${userId}...`);
             const member = await bot.getChatMember(target, userId);
-            console.log(`[channel_check] Status: ${member.status}`);
+            console.log(`[channel_check] Result for ${target}: ${member.status}`);
 
             if (!['creator', 'administrator', 'member'].includes(member.status)) {
-                missing.push({ id: target, title: title, url: channel.channel_username ? `https://t.me/${channel.channel_username.replace('@', '')}` : null });
+                return { id: target, title: title, url: channel.channel_username ? `https://t.me/${channel.channel_username.replace('@', '')}` : null };
             }
         } catch (e) {
             console.error(`[channel_check] Error checking ${target}: ${e.message}`);
-            // If check fails, we assume MISSING/BLOCKED to be safe (or bot kicked)
-            missing.push({ id: target, title: title, error: true });
+            // If check fails, assume missing
+            return { id: target, title: title, error: true };
         }
-    }
-    return missing;
+        return null;
+    });
+
+    const results = await Promise.all(checks);
+    return results.filter(r => r !== null);
 }
 
 // Helper to generate Poll UI
@@ -59,6 +60,11 @@ function generatePollContent(pollId) {
     inline_keyboard.push([
         { text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` },
         { text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }
+    ]);
+
+    // Add subtle "Start Bot" link for users who haven't started the bot yet
+    inline_keyboard.push([
+        { text: '🤖 Botni Ishga Tushirish', url: 'https://t.me/Namanganvoting_bot?start=welcome' }
     ]);
 
     return { caption, reply_markup: { inline_keyboard }, poll };
@@ -142,51 +148,85 @@ async function handleVote(bot, query, botUsername) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
             if (!SUPER_ADMINS.includes(userId)) {
+                // IMMEDIATELY acknowledge the callback to prevent "query too old" errors
+                // We'll send a follow-up message if verification fails
+                try {
+                    await bot.answerCallbackQuery(id, { text: '⏳ Tekshirilmoqda...' });
+                } catch (e) {
+                    // Ignore if already expired
+                }
+
                 // Check membership (Strict, No Cache)
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
                 if (missing.length > 0) {
+                    // User is NOT verified - they need to join channels
 
-                    // Fallback for Inline Results OR Channels/Groups => REDIRECT
-                    // Why? Groups/Channels cannot open WebApp improperly or it's spammy to send text to group.
-                    if (!message || !message.chat || message.chat.type !== 'private') {
-                        if (botUsername) {
-                            const redirectUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
-                            return bot.answerCallbackQuery(id, { url: redirectUrl, cache_time: 0 });
-                        } else {
-                            const missingTitles = missing.map(m => `• ${m.title}`).join('\n');
-                            const alertText = `⚠️ Ovoz berish uchun kanallarga a'zo bo'ling:\n\n${missingTitles}\n\nA'zo bo'lgach, qayta urining.`;
-                            return bot.answerCallbackQuery(id, { text: alertText.substring(0, 200), show_alert: true, cache_time: 0 });
+                    // Create a SINGLE button that redirects to the bot
+                    const botLink = `https://t.me/${botUsername}?start=verify_${pollId}`;
+
+                    // Build message for the group
+                    const userMention = `<a href="tg://user?id=${userId}">${from.first_name || 'Foydalanuvchi'}</a>`;
+                    const verificationText = `⚠️ ${userMention}, ovoz berish uchun avval majburiy kanallarga a'zo bo'lishingiz kerak!\n\n👇 Quyidagi tugmani bosing:`;
+
+                    const buttons = [[
+                        { text: '📢 Kanalarga Qo\'shilish', url: botLink }
+                    ]];
+
+                    // Send message to the group/chat
+                    if (message && message.chat && message.chat.id) {
+                        try {
+                            await bot.sendMessage(message.chat.id, verificationText, {
+                                parse_mode: 'HTML',
+                                reply_markup: { inline_keyboard: buttons },
+                                reply_to_message_id: message.message_id
+                            });
+                            console.log(`[Vote] Sent verification message to chat ${message.chat.id}`);
+                        } catch (e) {
+                            console.error('[Vote] Failed to send verification message:', e.message);
+                        }
+                    } else {
+                        // Inline mode - no group chat available
+                        // Try to send a PRIVATE message to the user directly
+                        console.log(`[Vote] Inline mode detected, sending PM to user ${userId}...`);
+
+                        // Build inline keyboard with join buttons
+                        const missingTitles = missing.map(m => `• ${m.title}`).join('\n');
+                        const pmButtons = missing.map(m => {
+                            const url = m.url || `https://t.me/${(m.title || '').replace('@', '')}`;
+                            return [{ text: `➕ ${m.title}`, url: url }];
+                        });
+                        pmButtons.push([{ text: '✅ Tekshirish va Ovoz Berish', callback_data: `check_verify:${pollId}` }]);
+
+                        const pmText = `⚠️ <b>Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:</b>\n\n${missingTitles}\n\nA'zo bo'lgach, "✅ Tekshirish" tugmasini bosing.`;
+
+                        try {
+                            await bot.sendMessage(userId, pmText, {
+                                parse_mode: 'HTML',
+                                reply_markup: { inline_keyboard: pmButtons }
+                            });
+                            console.log(`[Vote] Sent PM to user ${userId}`);
+                            // Acknowledge the callback
+                            await bot.answerCallbackQuery(id, { text: '📩 Botga xabar yuborildi! Shaxsiy chatni tekshiring.', show_alert: true });
+                        } catch (e) {
+                            console.error(`[Vote] Failed to send PM to ${userId}:`, e.message);
+                            // User hasn't started the bot - try URL redirect as backup
+                            const startBotUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
+                            try {
+                                await bot.answerCallbackQuery(id, { url: startBotUrl });
+                                console.log(`[Vote] Redirected unstarted user to: ${startBotUrl}`);
+                            } catch (e2) {
+                                // Redirect also failed - show alert with clear instructions
+                                console.error(`[Vote] Redirect also failed:`, e2.message);
+                                await bot.answerCallbackQuery(id, {
+                                    text: `⚠️ Avval @${botUsername} botga kirib "Start" bosing!\n\nKeyin ovoz berishingiz mumkin.`,
+                                    show_alert: true
+                                });
+                            }
                         }
                     }
 
-                    // Construct Verification UI for Chat Messages
-                    const text = `⚠️ <b>Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:</b>\n\n` +
-                        missing.map(m => `• ${m.title}`).join('\n');
-
-                    const buttons = missing.map(m => {
-                        return [{ text: `➕ ${m.title} ga qo'shilish`, url: m.url || `https://t.me/${m.title.replace('@', '')}` }];
-                    });
-
-                    // Add "Check Membership" button with Unique ID to force re-check
-                    // We use 'check_verify:POLL_ID' which is handled in index.js
-                    buttons.push([{ text: '✅ Tekshirish (Check Membership)', callback_data: `check_verify:${pollId}` }]);
-
-                    // We cannot just "redirect". We must show this UI.
-                    // Option 1: Edit the message? No, that destroys the poll UI.
-                    // Option 2: Send a new ephemeral message? 
-                    // Option 3: Answer with text? 
-                    // Prompt says "Send message... [Join] [Check]".
-                    // So we will Send Message.
-
-                    await bot.sendMessage(message.chat.id, text, {
-                        parse_mode: 'HTML',
-                        reply_markup: { inline_keyboard: buttons },
-                        reply_to_message_id: message.message_id
-                    });
-
-                    // Answer the original click to stop loading animation
-                    return bot.answerCallbackQuery(id, { text: '⚠️ Avval kanallarga a\'zo bo\'ling!', show_alert: true, cache_time: 0 });
+                    return; // Stop here - don't proceed to vote
                 }
             }
         }

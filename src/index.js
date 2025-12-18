@@ -12,6 +12,9 @@ const { handleVote, sendPoll, checkChannelMembership, generatePollContent } = re
 const { isAdmin, isSuperAdmin, handleAdminCallback, SUPER_ADMINS } = require('./admin');
 const { saveDraft, getDraft } = require('./drafts');
 
+// Global Config
+const webAppUrl = process.env.WEB_APP_URL || 'https://sorovnoma.freeddns.org';
+
 // Validate Environment
 if (!process.env.BOT_TOKEN) {
     console.error('CRITICAL: BOT_TOKEN is missing in .env');
@@ -429,13 +432,18 @@ bot.on('message', (msg) => {
     if (msg.text === '📝 Yangi Sorovnoma') {
         if (!isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, '⛔ You are not authorized.');
 
-        const webAppUrl = 'https://sorovnoma.freeddns.org';
-        bot.sendMessage(msg.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nQuyidagi tugmani bosib, sorovnoma yaratish oynasini oching:', {
+        bot.sendMessage(msg.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nAvval media fayl yuklaysizmi yoki birdaniga boshlaysizmi?', {
             parse_mode: 'HTML',
             reply_markup: {
-                inline_keyboard: [[
-                    { text: "📲 Sorovnoma Yaratish (Mini App)", web_app: { url: webAppUrl } }
-                ]]
+                inline_keyboard: [
+                    [
+                        { text: "📷 Rasm", callback_data: "newpoll:photo" },
+                        { text: "🎥 Video", callback_data: "newpoll:video" }
+                    ],
+                    [
+                        { text: "⏭️ O'tkazib yuborish (Skip)", callback_data: "newpoll:skip" }
+                    ]
+                ]
             }
         });
     }
@@ -538,7 +546,7 @@ bot.onText(/\/newpoll/, (msg) => {
         return bot.sendMessage(chatId, '❌ Sizda bu buyruqni ishlatish huquqi yoq.');
     }
 
-    const webAppUrl = 'https://sorovnoma.freeddns.org';
+    const webAppUrl = process.env.WEB_APP_URL || 'https://sorovnoma.freeddns.org';
 
     bot.sendMessage(chatId, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nAvval media fayl yuklaysizmi yoki birdaniga boshlaysizmi?', {
         parse_mode: 'HTML',
@@ -723,7 +731,7 @@ bot.on('callback_query', async (query) => {
 
     if (data.startsWith('newpoll:')) {
         const type = data.split(':')[1];
-        const webAppUrl = 'https://sorovnoma.freeddns.org';
+        const webAppUrl = process.env.WEB_APP_URL || 'https://sorovnoma.freeddns.org';
 
         if (type === 'skip') {
             bot.sendMessage(message.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nBoshlash uchun tugmani bosing:', {
@@ -744,6 +752,59 @@ bot.on('callback_query', async (query) => {
         }
     } else if (data.startsWith('wiz_')) {
         handleWizardCallback(bot, query);
+    } else if (data.startsWith('admin:edit:')) {
+        const parts = data.split(':');
+        const subAction = parts[2];
+        const pollId = parts[3];
+
+        if (subAction === 'MAIN') {
+            showEditMenu(bot, message.chat.id, pollId, message.message_id);
+            bot.answerCallbackQuery(query.id);
+        } else if (subAction === 'back') {
+            const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+            if (!poll) return;
+            const status = (poll.end_time && new Date() > new Date(poll.end_time)) ? '🔒 Yopiq' : '🟢 Ochiq';
+            const text = `⚙️ **Sorovnoma Boshqaruv**\n\n🆔 ID: ${poll.id}\n📝 ${poll.description}\n📅 Yaratilgan: ${poll.created_at}\n📊 Status: ${status}`;
+
+            const buttons = [
+                [
+                    { text: '🟢 Boshlash', callback_data: `admin:start:${pollId}` },
+                    { text: '🛑 Toxtatish', callback_data: `admin:stop:${pollId}` }
+                ],
+                [
+                    { text: '✏️ Tahrirlash (Kanal Qo\'shish)', callback_data: `admin:edit:MAIN:${pollId}` }
+                ],
+                [
+                    { text: '📊 Natijalar', callback_data: `admin:results:${pollId}` },
+                    { text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` }
+                ],
+                [
+                    { text: '🗑️ Ochirish (Delete)', callback_data: `admin:delete:${pollId}` }
+                ]
+            ];
+            bot.editMessageText(text, {
+                chat_id: message.chat.id,
+                message_id: message.message_id,
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: buttons }
+            });
+            bot.answerCallbackQuery(query.id);
+
+        } else if (subAction === 'add_channel') {
+            adminState.set(from.id, { action: 'ADD_CHANNEL', pollId: pollId, chatId: message.chat.id });
+            bot.sendMessage(message.chat.id, '✏️ **Kanal manzilini yuboring**:\n\nFormatlar:\n- `@kanal_nomi`\n- `https://t.me/kanal_linki`\n\n⚠️ Bot bu kanalda **ADMIN** bo\'lishi shart!', {
+                reply_markup: { force_reply: true }
+            });
+            bot.answerCallbackQuery(query.id);
+        } else if (subAction === 'remove_channel') {
+            const channelId = parts[3]; // format: admin:edit:remove_channel:CHANNEL_ID:POLL_ID
+            const pId = parts[4]; // pollId is at index 4 here
+
+            db.prepare('DELETE FROM required_channels WHERE id = ?').run(channelId);
+            bot.answerCallbackQuery(query.id, { text: '🗑️ Kanal ochirildi' });
+            showEditMenu(bot, message.chat.id, pId, message.message_id);
+        }
+
     } else if (data.startsWith('admin:')) {
         const parts = data.split(':');
         const action = parts[1];
@@ -864,15 +925,17 @@ bot.on('callback_query', async (query) => {
     } else if (data.startsWith('check_verify:')) {
         const pollId = data.split(':')[1];
         const userId = from.id;
-        const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
+        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
         const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
         if (missing.length === 0) {
-            bot.sendMessage(message.chat.id, '✅ Rahmat! Kanallarga azo boldingiz. Ovoz berishingiz mumkin:');
+            bot.sendMessage(message.chat.id, '✅ Rahmat! Kanallarga a\'zo bo\'ldingiz. Ovoz berishingiz mumkin:');
             await sendPoll(bot, message.chat.id, pollId);
             try { bot.deleteMessage(message.chat.id, message.message_id); } catch (e) { }
+            bot.answerCallbackQuery(query.id);
         } else {
-            bot.answerCallbackQuery(query.id, { text: `❌ Siz hali ham ${missing.join(', ')} kanallariga azo bolmadingiz!`, show_alert: true });
+            const missingNames = missing.map(m => m.title || 'Kanal').join(', ');
+            bot.answerCallbackQuery(query.id, { text: `❌ Siz hali ham ${missingNames} kanallariga a'zo bo'lmadingiz!`, show_alert: true });
         }
     } else {
         handleVote(bot, query, BOT_USERNAME);
@@ -894,6 +957,9 @@ bot.onText(/\/manage_(\d+)/, (msg, match) => {
         [
             { text: '🟢 Boshlash', callback_data: `admin:start:${pollId}` },
             { text: '🛑 Toxtatish', callback_data: `admin:stop:${pollId}` }
+        ],
+        [
+            { text: '✏️ Tahrirlash (Kanal Qo\'shish)', callback_data: `admin:edit:MAIN:${pollId}` }
         ],
         [
             { text: '📊 Natijalar', callback_data: `admin:results:${pollId}` },
@@ -957,7 +1023,13 @@ bot.on('inline_query', async (query) => {
 // ------------------------------------------------------------------
 // Background Task: Scheduler (Auto-Start & Auto-End)
 // ------------------------------------------------------------------
+// Admin State for Editing
+const adminState = new Map();
+
+// ... (Existing Scheduler) ...
+
 function checkPollTimers() {
+    // ... (Existing Code) ...
     try {
         const now = Date.now();
 
@@ -1012,6 +1084,96 @@ function checkPollTimers() {
 // Run Scheduler every 10 seconds
 setInterval(checkPollTimers, 10000);
 
+// Admin Edit Message Handler
+bot.on('message', async (msg) => {
+    if (!adminState.has(msg.from.id)) return;
+    if (msg.text && msg.text.startsWith('/')) return; // Ignore commands
+
+    const state = adminState.get(msg.from.id);
+    const chatId = msg.chat.id;
+
+    if (state.action === 'ADD_CHANNEL') {
+        const input = msg.text.trim();
+        // Check if user wants to cancel
+        if (input.toLowerCase() === 'cancel' || input === 'bekor') {
+            adminState.delete(msg.from.id);
+            return bot.sendMessage(chatId, '❌ Amal bekor qilindi.');
+        }
+
+        const pollId = state.pollId;
+        // Validate Channel
+        let channelUsername = input.replace(/^https:\/\/t\.me\//, '@').trim();
+        if (!channelUsername.startsWith('@')) channelUsername = '@' + channelUsername;
+
+        try {
+            const chat = await bot.getChat(channelUsername);
+            if (chat.type !== 'channel' && chat.type !== 'supergroup') {
+                return bot.sendMessage(chatId, `❌ ${channelUsername} kanal yoki guruh emas!`);
+            }
+
+            // Verify Admin
+            const me = await bot.getChatMember(chat.id, (await bot.getMe()).id);
+            if (!['administrator', 'creator'].includes(me.status)) {
+                return bot.sendMessage(chatId, `❌ Bot ${channelUsername} da admin emas! Avval botni admin qiling.`);
+            }
+
+            // Save to DB
+            const title = chat.title || channelUsername;
+            db.prepare('INSERT INTO required_channels (poll_id, channel_username, channel_id, channel_title) VALUES (?, ?, ?, ?)').run(pollId, channelUsername, chat.id, title);
+
+            bot.sendMessage(chatId, `✅ **Muvaffaqiyatli qo'shildi!**\n\n📌 ${title} (${channelUsername})\n\nEndi foydalanuvchilar ushbu kanalga a'zo bo'lishi shart.`, { parse_mode: 'Markdown' });
+            adminState.delete(msg.from.id);
+
+            // Refresh Menu
+            showEditMenu(bot, chatId, pollId);
+
+        } catch (e) {
+            console.error(e);
+            bot.sendMessage(chatId, `❌ Xatolik: ${channelUsername} topilmadi yoki botga ruxsat yo'q.\n\nIltimos, tekshirib qayta yozing yoki 'bekor' deb yozing.`);
+        }
+    }
+});
+
+function showEditMenu(bot, chatId, pollId, messageId = null) {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return;
+
+    const channels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
+    let text = `✏️ **Tahrirlash: Sorovnoma #${pollId}**\n\n📝 ${poll.description}\n\n📢 **Majburiy Kanallar:**\n`;
+
+    if (channels.length === 0) {
+        text += '_Hozircha kanallar yo\'q_';
+    } else {
+        channels.forEach((c, i) => {
+            text += `${i + 1}. ${c.channel_title} (${c.channel_username})\n`;
+        });
+    }
+
+    const buttons = [];
+    // Add Channel Button
+    buttons.push([{ text: '➕ Kanal Qo\'shish', callback_data: `admin:edit:add_channel:${pollId}` }]);
+
+    // Remove Buttons per channel
+    channels.forEach(c => {
+        buttons.push([{ text: `❌ O'chirish: ${c.channel_title}`, callback_data: `admin:edit:remove_channel:${c.id}:${pollId}` }]);
+    });
+
+    buttons.push([{ text: '⬅️ Ortga', callback_data: `admin:edit:back:${pollId}` }]);
+
+    const opts = {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: buttons }
+    };
+
+    if (messageId) {
+        bot.editMessageText(text, opts).catch(() => bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } }));
+    } else {
+        bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+    }
+}
+
 
 // Error Handling
 // Global Error Handlers
@@ -1027,7 +1189,7 @@ process.on('unhandledRejection', (reason, promise) => {
 console.log('[System] Bot is ready and running.');
 
 // --- MEDIA LISTENERS (For Drafts) ---
-const webAppUrl = 'https://sorovnoma.freeddns.org';
+// --- MEDIA LISTENERS (For Drafts) ---
 
 async function sendMediaDraftResponse(bot, msg, mediaType, fileId) {
     const chatId = msg.chat.id;
@@ -1070,17 +1232,20 @@ async function sendMediaDraftResponse(bot, msg, mediaType, fileId) {
 }
 
 bot.on('photo', (msg) => {
+    if (msg.chat.type !== 'private') return; // Ignore groups
     if (!isAdmin(msg.from.id)) return;
     const photo = msg.photo[msg.photo.length - 1]; // Largest
     sendMediaDraftResponse(bot, msg, 'photo', photo.file_id);
 });
 
 bot.on('video', (msg) => {
+    if (msg.chat.type !== 'private') return; // Ignore groups
     if (!isAdmin(msg.from.id)) return;
     sendMediaDraftResponse(bot, msg, 'video', msg.video.file_id);
 });
 
 bot.on('document', (msg) => {
+    if (msg.chat.type !== 'private') return; // Ignore groups
     if (!isAdmin(msg.from.id)) return;
     if (!msg.document || !msg.document.mime_type) return;
 
