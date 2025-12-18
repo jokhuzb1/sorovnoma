@@ -175,36 +175,38 @@ async function handleVote(bot, query, botUsername) {
                 console.log(`[Vote] User: ${userId}, Missing: ${missing.length > 0 ? missing.join(', ') : 'None'}`);
 
                 if (missing.length > 0) {
-                    if (botUsername) {
-                        try {
-                            console.log(`[Vote] Redirecting ${userId} to ${botUsername} (verify_${pollId})`);
-                            // Revert to https://t.me format as tg:// is not supported in answerCallbackQuery url param
-                            // await is essential to catch errors locally
-                            await bot.answerCallbackQuery(id, {
-                                url: `https://t.me/${botUsername}?start=verify_${pollId}`,
-                                cache_time: 0 // Disable cache to ensure reliability
-                            });
-                            return; // Stop execution
-                        } catch (e) {
-                            console.error(`[Vote] Redirect Failed for ${userId}:`, e.message);
-                            // Fallback alert if redirect fails
-                            await bot.answerCallbackQuery(id, {
-                                text: `⚠️ Iltimos, kanalga obuna bo'ling va qayta urinib ko'ring.`,
-                                show_alert: true,
-                                cache_time: 0
-                            });
-                            return;
-                        }
-                    } else {
-                        console.error('[Vote] Bot Username missing!');
-                    }
+                    const userMention = `<a href="tg://user?id=${userId}">${from.first_name || 'Foydalanuvchi'}</a>`;
+                    const channelsList = missing.map(ch => `👉 ${ch}`).join('\n');
+                    const warningText = `⚠️ ${userMention}, ovoz berish uchun quyidagi kanallarga obuna bo'ling:\n\n${channelsList}`;
 
-                    // Fallback (or if botUsername missing): Alert
-                    return bot.answerCallbackQuery(id, {
-                        text: `❌ Ovoz berish uchun kanalga a'zo bo'ling!`,
-                        show_alert: true,
-                        cache_time: 2
-                    });
+                    try {
+                        const sentMsg = await bot.sendMessage(message.chat.id, warningText, {
+                            parse_mode: 'HTML',
+                            disable_web_page_preview: true
+                        });
+
+                        // Show toast to user
+                        await bot.answerCallbackQuery(id, {
+                            text: "⚠️ Avval kanallarga a'zo bo'ling (Chatdagi xabarni o'qing)!",
+                            show_alert: false, // Toast, not popup
+                            cache_time: 2 // Short cache
+                        });
+
+                        // Auto-delete warning after 20 seconds to avoid spam
+                        setTimeout(() => {
+                            bot.deleteMessage(message.chat.id, sentMsg.message_id).catch(() => { });
+                        }, 20000);
+
+                    } catch (err) {
+                        console.error('[Vote] Failed to send warning message:', err.message);
+                        // Fallback to alert if sending message fails (e.g. permission issues)
+                        await bot.answerCallbackQuery(id, {
+                            text: `⚠️ Iltimos, kanalga obuna bo'ling:\n${missing.join('\n')}`,
+                            show_alert: true,
+                            cache_time: 0
+                        });
+                    }
+                    return;
                 }
             }
         }
