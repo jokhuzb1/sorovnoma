@@ -19,12 +19,13 @@
         </header>
 
         <form id="pollForm">
-            <!-- Media Upload -->
-            <div class="card media-card">
+            <!-- Media Upload (Hidden by default, shown if Draft exists) -->
+            <div class="card media-card" id="mediaCard" style="display: none;">
                 <label for="mediaInput" class="media-upload-area" id="dropZone">
                     <div class="icon">📁</div>
-                    <span id="fileLabel">Rasm yoki Video yuklash (ixtiyoriy)</span>
-                    <input type="file" id="mediaInput" name="media" accept="image/*,video/*" hidden>
+                    <span id="fileLabel">Media biriktirilgan</span>
+                    <!-- Input removed/disabled since we use drafts -->
+                    <input type="hidden" id="mediaInput"> 
                 </label>
             </div>
 

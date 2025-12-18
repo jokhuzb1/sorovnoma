@@ -45,11 +45,14 @@ if (tg.initDataUnsafe?.user?.id) {
         .then(data => {
             if (data.media) {
                 draftMedia = data.media;
+                // Show Card
+                const mediaCard = document.getElementById('mediaCard');
+                if (mediaCard) mediaCard.style.display = 'block';
+
                 // Update UI
                 const typeName = draftMedia.type === 'video' ? 'Video' : 'Rasm';
                 fileLabel.innerHTML = `✅ <b>${typeName} biriktirildi</b> (Chatdan olindi)`;
                 fileLabel.className = 'w-full p-4 border-2 border-green-500 border-dashed rounded-xl text-center text-green-600 bg-green-50 cursor-not-allowed';
-                fileInput.disabled = true; // Disable manual upload if draft exists
 
                 // Add Reset Button (Optional, but good for UX)
                 // For now, simplicity: if they want to change, they send new media to bot or just use this.

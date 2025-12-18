@@ -179,8 +179,9 @@ async function handleVote(bot, query, botUsername) {
                         try {
                             console.log(`[Vote] Redirecting ${userId} to ${botUsername} (verify_${pollId})`);
                             // Deep Link Redirect to Bot PM
+                            // Using tg://resolve is often more reliable for instant switching on mobile
                             return bot.answerCallbackQuery(id, {
-                                url: `https://t.me/${botUsername}?start=verify_${pollId}`,
+                                url: `tg://resolve?domain=${botUsername}&start=verify_${pollId}`,
                                 cache_time: 2
                             });
                         } catch (e) {
