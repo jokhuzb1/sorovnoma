@@ -133,7 +133,10 @@ async function handleVote(bot, query, botUsername) {
     const userId = from.id;
 
     try {
-        const [type, pollId, optionId] = data.split(':');
+        const [type, strPollId, strOptionId] = data.split(':');
+        /* FORCE INT */
+        const pollId = parseInt(strPollId, 10);
+        const optionId = parseInt(strOptionId, 10);
 
         // HANDLE REFRESH
         if (type === 'refresh') {
@@ -143,9 +146,14 @@ async function handleVote(bot, query, botUsername) {
 
         if (type !== 'vote') return bot.answerCallbackQuery(id); // Just close for non-votes
 
+        console.log(`[Vote] User: ${userId}, Poll: ${pollId}, Option: ${optionId}`);
+
         // Input Debouncing (UI Level)
         const uniqueKey = `${userId}:${data}`;
-        if (processingCache.has(uniqueKey)) return bot.answerCallbackQuery(id);
+        if (processingCache.has(uniqueKey)) {
+            console.log(`[Vote] Debounced: ${uniqueKey}`);
+            return bot.answerCallbackQuery(id);
+        }
         processingCache.add(uniqueKey);
         setTimeout(() => processingCache.delete(uniqueKey), 500);
 
@@ -155,26 +163,44 @@ async function handleVote(bot, query, botUsername) {
         const settings = JSON.parse(poll.settings_json || '{}');
         const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
 
+        console.log(`[Vote] Required Channels: ${requiredChannels.join(', ')}`);
+
         // Gatekeeping Check (Async - outside transaction)
         if (requiredChannels.length > 0) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
             if (!SUPER_ADMINS.includes(userId)) {
+                // Check membership (Fast with Cache)
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
+                console.log(`[Vote] Missing Channels: ${missing.join(', ')}`);
 
                 if (missing.length > 0) {
-                    if (botUsername) {
-                        return bot.answerCallbackQuery(id, {
-                            url: `https://t.me/${botUsername}?start=verify_${pollId}`,
-                            cache_time: 2 // Short cache for redirect
+                    // Optimized: Send a MESSAGE with buttons immediately instead of redirecting
+                    // This is more reliable than deep links and faster for the user.
+
+                    const buttons = missing.map(ch => {
+                        const username = ch.replace('@', '');
+                        return [{ text: `➕ ${ch} ga a'zo bo'lish`, url: `https://t.me/${username}` }];
+                    });
+
+                    // Add "Verify" button
+                    buttons.push([{ text: '✅ Tekshirish (Verify)', callback_data: `refresh:${pollId}` }]); // refresh acts as verify here effectively as it re-renders/allows voting next click
+
+                    try {
+                        await bot.sendMessage(userId, `🛑 **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**`, {
+                            parse_mode: 'Markdown',
+                            reply_markup: { inline_keyboard: buttons }
                         });
-                    } else {
-                        return bot.answerCallbackQuery(id, {
-                            text: `Ovoz berish uchun ${missing.join(', ')} kanallariga azo bolishingiz kerak!`,
-                            show_alert: true,
-                            cache_time: 2 // Short cache for alert
-                        });
+                    } catch (e) {
+                        // If DM fails (user blocked bot?), try alert
+                        console.error('Failed to send verification DM:', e.message);
                     }
+
+                    return bot.answerCallbackQuery(id, {
+                        text: `❌ Siz ${missing.length} ta kanalga a'zo emassiz! Botdan xabar keldi.`,
+                        show_alert: true,
+                        cache_time: 5
+                    });
                 }
             }
         }

@@ -106,7 +106,17 @@ submitBtn.addEventListener('click', async () => {
             tg.showAlert('Xatolik: ' + result.message);
         }
     } catch (error) {
-        tg.showAlert('Serverda xatolik yuz berdi: ' + error.message);
+        // Detailed Error Logging
+        const msg = error.message || 'Unknown Error';
+        const stack = error.stack || '';
+        console.error('Submit Error:', error);
+
+        let userMsg = 'Serverda xatolik yuz berdi: ' + msg;
+        if (msg.includes('match the expected pattern')) {
+            userMsg = 'Browser Error (DOMException): ' + msg + '\nStep: ' + (submitBtn.innerText === 'Yaratish' ? 'Pre-Fetch' : 'Fetching');
+        }
+
+        tg.showAlert(userMsg);
     } finally {
         document.getElementById('loader').classList.add('hidden');
         submitBtn.disabled = false;
