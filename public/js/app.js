@@ -21,6 +21,10 @@ addOptionBtn.addEventListener('click', () => {
         <button type="button" class="btn-secondary" style="width: 40px;" onclick="this.parentElement.remove()">✕</button>
     `;
     optionsContainer.appendChild(div);
+
+    // Focus the new input
+    const newInput = div.querySelector('input');
+    if (newInput) newInput.focus();
 });
 
 // File Preview Logic

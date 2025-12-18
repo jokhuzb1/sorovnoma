@@ -132,6 +132,14 @@ async function handleVote(bot, query, botUsername) {
     const { id, data, message, from, inline_message_id } = query;
     const userId = from.id;
 
+    // Input Debouncing (UI Level) - Check FIRST for speed
+    const uniqueKey = `${userId}:${data}`;
+    if (processingCache.has(uniqueKey)) {
+        return bot.answerCallbackQuery(id);
+    }
+    processingCache.add(uniqueKey);
+    setTimeout(() => processingCache.delete(uniqueKey), 500);
+
     try {
         const [type, strPollId, strOptionId] = data.split(':');
         /* FORCE INT */
@@ -146,16 +154,7 @@ async function handleVote(bot, query, botUsername) {
 
         if (type !== 'vote') return bot.answerCallbackQuery(id); // Just close for non-votes
 
-        console.log(`[Vote] User: ${userId}, Poll: ${pollId}, Option: ${optionId}`);
-
-        // Input Debouncing (UI Level)
-        const uniqueKey = `${userId}:${data}`;
-        if (processingCache.has(uniqueKey)) {
-            console.log(`[Vote] Debounced: ${uniqueKey}`);
-            return bot.answerCallbackQuery(id);
-        }
-        processingCache.add(uniqueKey);
-        setTimeout(() => processingCache.delete(uniqueKey), 500);
+        // console.log(`[Vote] User: ${userId}, Poll: ${pollId}, Option: ${optionId}`);
 
         const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
         if (!poll) return bot.answerCallbackQuery(id, { text: 'Sorovnoma topilmadi!' });
