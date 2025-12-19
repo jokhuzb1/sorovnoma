@@ -59,16 +59,11 @@ function generatePollContent(pollId, botUsername) {
     // Blind Voting: No stats in caption
     let caption = `${poll.description}\n\n🕒 Holat: ${status}`;
 
-    // Blind Voting: No counts in buttons
+    // Show vote counts in buttons
     const inline_keyboard = options.map(opt => [{
-        text: `⚪️ ${opt.text}`,
+        text: `⚪️ ${opt.text} (${countsMap[opt.id] || 0})`,
         callback_data: `vote:${pollId}:${opt.id}`
     }]);
-
-    // Admin Tools row (Natijalar)
-    inline_keyboard.push([
-        { text: '📊 Natijalar', callback_data: `results:${pollId}` }
-    ]);
 
     // Add Share Button AND Refresh Button
     inline_keyboard.push([
