@@ -251,10 +251,16 @@ async function handleVote(bot, query, botUsername) {
                         returnLinkMap.set(userId, `https://t.me/${message.chat.username}/${message.message_id}`);
                     }
 
+                    // CRITICAL: Answer callback IMMEDIATELY to prevent timeout
+                    await bot.answerCallbackQuery(id, {
+                        text: '⚠️ Kanallarga a\'zo bo\'lishingiz kerak!',
+                        show_alert: false
+                    });
+
                     // Generate "Join Bot" version of the poll
                     const joinBotPoll = generateJoinBotPoll(pollId, botUsername);
                     if (!joinBotPoll) {
-                        return bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi', show_alert: true });
+                        return;
                     }
 
                     // Update the poll message to show "Join Bot" button
@@ -265,19 +271,8 @@ async function handleVote(bot, query, botUsername) {
                             await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { chat_id: chatId, message_id: messageId });
                         }
                         console.log(`[DEBUG] Replaced poll buttons for user ${userId}`);
-
-                        // Show clear popup alert
-                        await bot.answerCallbackQuery(id, {
-                            text: '⚠️ Ovoz berish uchun kanallarga a\'zo bo\'lishingiz kerak!\n\n👇 Pastdagi "Kanallarga Qo\'shilish" tugmasini bosing',
-                            show_alert: true
-                        });
                     } catch (e) {
                         console.log(`[DEBUG] Failed to replace buttons:`, e.message);
-                        // Fallback: show alert
-                        await bot.answerCallbackQuery(id, {
-                            text: `⚠️ Ovoz berish uchun @${botUsername} ga o'ting va kanallarga a'zo bo'ling`,
-                            show_alert: true
-                        });
                     }
                     return; // Stop here - don't proceed to vote
                 }
