@@ -17,8 +17,15 @@ async function checkChannelMembership(bot, userId, requiredChannels) {
             }
         } catch (e) {
             console.error(`[channel_check] Error checking ${target}: ${e.message}`);
-            // If check fails, assume missing
-            return { id: target, title: title, error: true };
+            // Check for specific Bot Permissions errors
+            if (e.message.includes('bot is not a member') || e.message.includes('user not found')) {
+                return { id: target, title: title, error: `Bot ${title} kanalida admin emas!` };
+            }
+            if (e.message.includes('chat not found')) {
+                return { id: target, title: title, error: `Kanal topilmadi: ${title}` };
+            }
+            // General error
+            return { id: target, title: title, error: `Xatolik: ${e.message}` };
         }
         return null;
     });
@@ -28,7 +35,7 @@ async function checkChannelMembership(bot, userId, requiredChannels) {
 }
 
 // Helper to generate Poll UI
-function generatePollContent(pollId) {
+function generatePollContent(pollId, botUsername) {
     const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
     if (!poll) return null;
 
@@ -49,12 +56,19 @@ function generatePollContent(pollId) {
     if (poll.start_time && now < new Date(poll.start_time)) status = `Boshlanadi: ${new Date(poll.start_time).toLocaleString()}`;
     if (poll.end_time && now > new Date(poll.end_time)) status = 'Yopilgan 🔒';
 
-    const caption = `${poll.description}\n\n📊 Jami ovozlar: ${totalVotes}\n⚙️ Rejim: ${mode}\n🕒 Holat: ${status}`;
+    // Blind Voting: No stats in caption
+    let caption = `${poll.description}\n\n🕒 Holat: ${status}`;
 
+    // Blind Voting: No counts in buttons
     const inline_keyboard = options.map(opt => [{
-        text: `${opt.text} (${countsMap[opt.id] || 0})`,
+        text: `⚪️ ${opt.text}`,
         callback_data: `vote:${pollId}:${opt.id}`
     }]);
+
+    // Admin Tools row (Natijalar)
+    inline_keyboard.push([
+        { text: '📊 Natijalar', callback_data: `results:${pollId}` }
+    ]);
 
     // Add Share Button AND Refresh Button
     inline_keyboard.push([
@@ -62,15 +76,55 @@ function generatePollContent(pollId) {
         { text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }
     ]);
 
-    // Add subtle "Start Bot" link for users who haven't started the bot yet
-    inline_keyboard.push([
-        { text: '🤖 Botni Ishga Tushirish', url: 'https://t.me/Namanganvoting_bot?start=welcome' }
-    ]);
+    return { caption, reply_markup: { inline_keyboard }, poll };
+}
+
+// Helper to generate "Join Bot" version of poll for unverified users
+function generateJoinBotPoll(pollId, botUsername) {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return null;
+
+    let status = 'Ochiq';
+    const now = new Date();
+    if (poll.start_time && now < new Date(poll.start_time)) status = `Boshlanadi: ${new Date(poll.start_time).toLocaleString()}`;
+    if (poll.end_time && now > new Date(poll.end_time)) status = 'Yopilgan 🔒';
+
+    let caption = `${poll.description}\n\n🕒 Holat: ${status}`;
+
+    const startBotUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
+    const inline_keyboard = [
+        [{ text: '🤖 Kanallarga Qo\'shilish (Botni Boshlash)', url: startBotUrl }],
+        [{ text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }]
+    ];
 
     return { caption, reply_markup: { inline_keyboard }, poll };
 }
 
 const updateQueue = new Map();
+
+// Helper to generate text results
+function getPollResults(pollId) {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return "Sorovnoma topilmadi.";
+
+    const options = db.prepare('SELECT * FROM options WHERE poll_id = ?').all(pollId);
+    const totalVotes = db.prepare('SELECT COUNT(DISTINCT user_id) as count FROM votes WHERE poll_id = ?').get(pollId).count;
+    const voteCounts = db.prepare('SELECT option_id, COUNT(*) as count FROM votes WHERE poll_id = ? GROUP BY option_id').all(pollId);
+    const countsMap = {};
+    voteCounts.forEach(row => countsMap[row.option_id] = row.count);
+
+    let text = `📊 **Sorovnoma Natijalari** (#${pollId})\n\n`;
+    text += `📝 ${poll.description}\n\n`;
+
+    options.forEach(opt => {
+        const count = countsMap[opt.id] || 0;
+        const percent = totalVotes > 0 ? ((count / totalVotes) * 100).toFixed(1) : 0;
+        text += `▫️ ${opt.text}: **${count}** ovoz (${percent}%)\n`;
+    });
+
+    text += `\n👥 Jami ovozlar: ${totalVotes}`;
+    return text;
+}
 
 // Process Queue Instantly or Very Fast (200ms)
 setInterval(async () => {
@@ -115,6 +169,27 @@ async function handleVote(bot, query, botUsername) {
         const [type, pollIdStr, optionIdStr] = data.split(':');
         /* FORCE INT */
         const pollId = parseInt(pollIdStr, 10);
+
+        // ------------------ RESULTS HANDLER ------------------
+        if (type === 'results') {
+            const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
+
+            // Check if user is Admin or Super Admin
+            let isAdmin = SUPER_ADMINS.includes(userId);
+            if (!isAdmin) {
+                const adminEntry = db.prepare('SELECT 1 FROM admins WHERE user_id = ?').get(userId);
+                if (adminEntry) isAdmin = true;
+            }
+
+            if (!isAdmin) {
+                return bot.answerCallbackQuery(id, { text: '⛔ Faqat adminlar korishi mumkin.', show_alert: true });
+            }
+
+            const resultsText = getPollResults(pollId);
+            return bot.answerCallbackQuery(id, { text: resultsText, show_alert: true });
+        }
+        // ----------------------------------------------------
+
         const optionId = parseInt(optionIdStr, 10);
 
         // IMPLEMENT HANDLE REFRESH LOCALLY
@@ -148,84 +223,62 @@ async function handleVote(bot, query, botUsername) {
             const SUPER_ADMINS = (process.env.ADMIN_IDS || '').split(',').map(id => parseInt(id.trim(), 10));
 
             if (!SUPER_ADMINS.includes(userId)) {
-                // IMMEDIATELY acknowledge the callback to prevent "query too old" errors
-                // We'll send a follow-up message if verification fails
-                try {
-                    await bot.answerCallbackQuery(id, { text: '⏳ Tekshirilmoqda...' });
-                } catch (e) {
-                    // Ignore if already expired
-                }
+                // Check membership immediately (no initial callback answer - we'll answer with redirect or error)
 
                 // Check membership (Strict, No Cache)
                 const missing = await checkChannelMembership(bot, userId, requiredChannels);
+                console.log(`[DEBUG] Missing channels for user ${userId}:`, missing.length);
 
                 if (missing.length > 0) {
-                    // User is NOT verified - they need to join channels
-
-                    // Create a SINGLE button that redirects to the bot
-                    const botLink = `https://t.me/${botUsername}?start=verify_${pollId}`;
-
-                    // Build message for the group
-                    const userMention = `<a href="tg://user?id=${userId}">${from.first_name || 'Foydalanuvchi'}</a>`;
-                    const verificationText = `⚠️ ${userMention}, ovoz berish uchun avval majburiy kanallarga a'zo bo'lishingiz kerak!\n\n👇 Quyidagi tugmani bosing:`;
-
-                    const buttons = [[
-                        { text: '📢 Kanalarga Qo\'shilish', url: botLink }
-                    ]];
-
-                    // Send message to the group/chat
-                    if (message && message.chat && message.chat.id) {
-                        try {
-                            await bot.sendMessage(message.chat.id, verificationText, {
-                                parse_mode: 'HTML',
-                                reply_markup: { inline_keyboard: buttons },
-                                reply_to_message_id: message.message_id
-                            });
-                            console.log(`[Vote] Sent verification message to chat ${message.chat.id}`);
-                        } catch (e) {
-                            console.error('[Vote] Failed to send verification message:', e.message);
-                        }
-                    } else {
-                        // Inline mode - no group chat available
-                        // Try to send a PRIVATE message to the user directly
-                        console.log(`[Vote] Inline mode detected, sending PM to user ${userId}...`);
-
-                        // Build inline keyboard with join buttons
-                        const missingTitles = missing.map(m => `• ${m.title}`).join('\n');
-                        const pmButtons = missing.map(m => {
-                            const url = m.url || `https://t.me/${(m.title || '').replace('@', '')}`;
-                            return [{ text: `➕ ${m.title}`, url: url }];
+                    // Check if any error exists
+                    const errors = missing.filter(m => m.error);
+                    if (errors.length > 0) {
+                        console.log(`[DEBUG] Channel check errors:`, errors);
+                        // Show technical error to user instead of loop
+                        const errorMsg = errors.map(e => `⚠️ ${e.error}`).join('\n');
+                        return bot.answerCallbackQuery(id, {
+                            text: `BOT SOZLAMALARIDA XATOLIK:\n\n${errorMsg}\n\nAdmin bilan bog'laning.`,
+                            show_alert: true
                         });
-                        pmButtons.push([{ text: '✅ Tekshirish va Ovoz Berish', callback_data: `check_verify:${pollId}` }]);
-
-                        const pmText = `⚠️ <b>Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:</b>\n\n${missingTitles}\n\nA'zo bo'lgach, "✅ Tekshirish" tugmasini bosing.`;
-
-                        try {
-                            await bot.sendMessage(userId, pmText, {
-                                parse_mode: 'HTML',
-                                reply_markup: { inline_keyboard: pmButtons }
-                            });
-                            console.log(`[Vote] Sent PM to user ${userId}`);
-                            // Acknowledge the callback
-                            await bot.answerCallbackQuery(id, { text: '📩 Botga xabar yuborildi! Shaxsiy chatni tekshiring.', show_alert: true });
-                        } catch (e) {
-                            console.error(`[Vote] Failed to send PM to ${userId}:`, e.message);
-                            // User hasn't started the bot - try URL redirect as backup
-                            const startBotUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
-                            try {
-                                await bot.answerCallbackQuery(id, { url: startBotUrl });
-                                console.log(`[Vote] Redirected unstarted user to: ${startBotUrl}`);
-                            } catch (e2) {
-                                // Redirect also failed - show alert with clear instructions
-                                console.error(`[Vote] Redirect also failed:`, e2.message);
-                                await bot.answerCallbackQuery(id, {
-                                    text: `⚠️ Avval @${botUsername} botga kirib "Start" bosing!\n\nKeyin ovoz berishingiz mumkin.`,
-                                    show_alert: true
-                                });
-                            }
-                        }
                     }
 
+
+                    // DYNAMIC BUTTON REPLACEMENT: Replace poll buttons with "Join Bot" button
+                    console.log(`[DEBUG] User ${userId} not verified. Replacing poll buttons...`);
+
+                    // Save Return Link Context
+                    if (message && message.chat && message.chat.username) {
+                        returnLinkMap.set(userId, `https://t.me/${message.chat.username}/${message.message_id}`);
+                    }
+
+                    // Generate "Join Bot" version of the poll
+                    const joinBotPoll = generateJoinBotPoll(pollId, botUsername);
+                    if (!joinBotPoll) {
+                        return bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi', show_alert: true });
+                    }
+
+                    // Update the poll message to show "Join Bot" button
+                    try {
+                        if (inline_message_id) {
+                            await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { inline_message_id });
+                        } else if (chatId && messageId) {
+                            await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { chat_id: chatId, message_id: messageId });
+                        }
+                        console.log(`[DEBUG] Replaced poll buttons for user ${userId}`);
+
+                        // Show clear popup alert
+                        await bot.answerCallbackQuery(id, {
+                            text: '⚠️ Ovoz berish uchun kanallarga a\'zo bo\'lishingiz kerak!\n\n👇 Pastdagi "Kanallarga Qo\'shilish" tugmasini bosing',
+                            show_alert: true
+                        });
+                    } catch (e) {
+                        console.log(`[DEBUG] Failed to replace buttons:`, e.message);
+                        // Fallback: show alert
+                        await bot.answerCallbackQuery(id, {
+                            text: `⚠️ Ovoz berish uchun @${botUsername} ga o'ting va kanallarga a'zo bo'ling`,
+                            show_alert: true
+                        });
+                    }
                     return; // Stop here - don't proceed to vote
                 }
             }
@@ -285,8 +338,8 @@ async function handleVote(bot, query, botUsername) {
             return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
         }
 
-        // Send Success Toast
-        bot.answerCallbackQuery(id, { text: successMessage });
+        // Send Success Popup Alert
+        bot.answerCallbackQuery(id, { text: `✅ ${successMessage}`, show_alert: true });
 
         // Queue UI Update
         const chatId = message ? message.chat.id : null;
@@ -303,17 +356,17 @@ async function handleVote(bot, query, botUsername) {
     }
 }
 
-async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null) {
-    const content = generatePollContent(pollId);
+async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null, botUsername = null) {
+    const content = generatePollContent(pollId, botUsername);
     if (!content) return;
 
     const { caption, reply_markup } = content;
 
     try {
         if (inlineMessageId) {
-            await bot.editMessageCaption(caption, { inline_message_id: inlineMessageId, reply_markup });
+            await bot.editMessageCaption(caption, { inline_message_id: inlineMessageId, reply_markup, parse_mode: 'HTML' });
         } else if (chatId && messageId) {
-            await bot.editMessageCaption(caption, { chat_id: chatId, message_id: messageId, reply_markup });
+            await bot.editMessageCaption(caption, { chat_id: chatId, message_id: messageId, reply_markup, parse_mode: 'HTML' });
         }
     } catch (e) {
         // Fallback for text messages
@@ -331,8 +384,8 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
     }
 }
 
-async function sendPoll(bot, chatId, pollId) {
-    const content = generatePollContent(pollId);
+async function sendPoll(bot, chatId, pollId, botUsername = null) {
+    const content = generatePollContent(pollId, botUsername);
     if (!content) return false;
 
     const { caption, reply_markup, poll } = content;
@@ -352,4 +405,6 @@ async function sendPoll(bot, chatId, pollId) {
     }
 }
 
-module.exports = { handleVote, updatePollMessage, sendPoll, generatePollContent, checkChannelMembership };
+const returnLinkMap = new Map();
+
+module.exports = { handleVote, updatePollMessage, sendPoll, generatePollContent, checkChannelMembership, returnLinkMap, getPollResults };

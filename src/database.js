@@ -70,7 +70,13 @@ const migrations = [
     'ALTER TABLE polls ADD COLUMN creator_id INTEGER',
     'ALTER TABLE polls ADD COLUMN published INTEGER DEFAULT 0',
     'ALTER TABLE required_channels ADD COLUMN channel_id INTEGER',
-    'ALTER TABLE required_channels ADD COLUMN channel_title TEXT'
+    'ALTER TABLE required_channels ADD COLUMN channel_title TEXT',
+    `CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        first_name TEXT,
+        username TEXT,
+        joined_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
 ];
 
 migrations.forEach(query => {

@@ -7,7 +7,7 @@ const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
 const { startWizard, handleWizardStep, handleWizardCallback } = require('./wizard');
-const { handleVote, sendPoll, checkChannelMembership, generatePollContent } = require('./voting');
+const { handleVote, sendPoll, checkChannelMembership, generatePollContent, getPollResults, returnLinkMap } = require('./voting');
 
 const { isAdmin, isSuperAdmin, handleAdminCallback, SUPER_ADMINS } = require('./admin');
 const { saveDraft, getDraft } = require('./drafts');
@@ -277,7 +277,7 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
         }
 
         // Send to Creator
-        await sendPoll(bot, user_id, pollId);
+        await sendPoll(bot, user_id, pollId, BOT_USERNAME);
 
         res.json({ success: true, pollId });
 
@@ -299,45 +299,184 @@ bot.getMe().then(me => {
 });
 
 // --- DEEP LINK HANDLER (Authentication Flow) ---
-bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
+// --- DEEP LINK HANDLER & START COMMAND ---
+bot.onText(/\/start(.*)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    const payload = match[1]; // content after /start
+    const param = match[1] ? match[1].trim() : '';
 
-    if (!payload || !payload.startsWith('verify_')) {
-        // Normal Start
-        return bot.sendMessage(chatId, '👋 Salom! Men Sorovnoma Botman.\n\nSorovnoma yaratish uchun /newpoll buyrug\'ini yuboring (Adminlar uchun).');
+    // TRACK USER
+    try {
+        db.prepare('INSERT OR IGNORE INTO users (user_id, first_name, username) VALUES (?, ?, ?)').run(
+            userId, msg.from.first_name, msg.from.username
+        );
+    } catch (e) {
+        // console.error('User tracking error:', e);
     }
 
-    // Verify Payload
-    const pollId = parseInt(payload.replace('verify_', ''), 10);
-    if (isNaN(pollId)) return bot.sendMessage(chatId, '❌ Xato havolasi.');
-
-    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
-    if (!poll) return bot.sendMessage(chatId, '❌ Sorovnoma topilmadi.');
-
-    // Check Channels
-    const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
-
-    // Perform detailed check
-    const { checkChannelMembership } = require('./voting');
-    const missing = await checkChannelMembership(bot, userId, requiredChannels);
-
-    if (missing.length === 0) {
-        return bot.sendMessage(chatId, '✅ **Siz barcha kanallarga a\'zo bo\'lgansiz!**\n\nEndi ovoz berishingiz mumkin.', { parse_mode: 'Markdown' });
+    // CHECK ADMIN STATUS
+    const isSuper = isSuperAdmin(userId);
+    let isAdmin = isSuper;
+    if (!isAdmin) {
+        const adminEntry = db.prepare('SELECT 1 FROM admins WHERE user_id = ?').get(userId);
+        if (adminEntry) isAdmin = true;
     }
 
-    const buttons = missing.map(ch => {
-        const username = ch.replace('@', '');
-        return [{ text: `➕ ${ch} ga a'zo bo'lish`, url: `https://t.me/${username}` }];
-    });
+    // HANDLE DEEP LINKS
+    if (param) {
+        if (param.startsWith('poll_')) {
+            const pollId = param.split('_')[1];
+            return await sendPoll(bot, chatId, pollId, BOT_USERNAME);
+        }
+        if (param.startsWith('verify_')) {
+            const pollId = parseInt(param.replace('verify_', ''), 10);
+            if (isNaN(pollId)) return bot.sendMessage(chatId, '❌ Xato havolasi.');
 
-    buttons.push([{ text: '✅ Tekshirish', callback_data: `check_sub:${pollId}` }]);
+            const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+            const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
 
-    bot.sendMessage(chatId, `🛑 **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**`, {
-        parse_mode: 'Markdown',
-        reply_markup: { inline_keyboard: buttons }
-    });
+            // Re-check logic
+            const missing = await checkChannelMembership(bot, userId, requiredChannels);
+
+            if (missing.length === 0) {
+                return bot.sendMessage(chatId, '✅ **Siz barcha kanallarga a\'zo bo\'lgansiz!**\n\nEndi ovoz berishingiz mumkin.', { parse_mode: 'Markdown' });
+            }
+
+            const buttons = missing.map(ch => {
+                let url = ch.url || (ch.channel_username ? `https://t.me/${ch.channel_username.replace('@', '')}` : 'https://t.me/');
+                return [{ text: `📢 ${ch.title || 'Kanal'}`, url: url }];
+            });
+
+            buttons.push([{ text: '✅ Obuna bo\'ldim', callback_data: `check_sub:${pollId}` }]);
+
+            if (pollId) {
+                // Try to guess return link from map? No, we handle that in callback.
+            }
+
+            return bot.sendMessage(chatId, `🛑 **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**`, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: buttons }
+            });
+        }
+    }
+
+    // --- MENU DISPLAY (Access Control) ---
+    if (isAdmin) {
+        let keyboard = [
+            ['📝 Yangi Sorovnoma', '⚙️ Boshqarish'],
+            ['ℹ️ Yordam', '📊 Statistika']
+        ];
+        if (isSuper) {
+            // Super Admins see ALL
+            keyboard.push(['📢 Yangilik Yuborish', '👤 Adminlar']);
+        }
+
+        bot.sendMessage(chatId, `👋 Xush kelibsiz! ${isSuper ? '(Super Admin)' : '(Admin)'}`, {
+            reply_markup: {
+                keyboard: keyboard,
+                resize_keyboard: true
+            }
+        });
+    } else {
+        // NON-ADMIN OR REGULAR USER
+        bot.sendMessage(chatId, `👋 Assalomu alaykum, ${msg.from.first_name}!\n\nBotdan foydalanish uchun kanallarda e'lon qilingan so'rovnomalarda qatnashing.`, {
+            reply_markup: {
+                remove_keyboard: true
+            }
+        });
+    }
+});
+
+// BROADCAST STATE
+const broadcastState = new Map();
+
+bot.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const text = msg.text;
+
+    if (!text) return; // Ignore non-text for menu commands (unless wizard needs files? simplified for now)
+
+    // 1. Check Broadcast Command
+    if (text === '📢 Yangilik Yuborish') {
+        if (!isSuperAdmin(userId)) return;
+        broadcastState.set(userId, { step: 'ask_message' });
+        return bot.sendMessage(chatId, '📢 <b>Yangilik matnini yuboring</b> (rasm/video ham mumkin, lekin hozircha faqat matn/forward qabul qilinadi):\n\nBekor qilish uchun /cancel', { parse_mode: 'HTML', reply_markup: { remove_keyboard: true } });
+    }
+
+    // 2. Handle Broadcast State
+    if (broadcastState.has(userId)) {
+        const state = broadcastState.get(userId);
+        if (text === '/cancel') {
+            broadcastState.delete(userId);
+            return bot.sendMessage(chatId, '❌ Bekor qilindi.', {
+                reply_markup: { keyboard: [['📝 Yangi Sorovnoma', '⚙️ Boshqarish'], ['👤 Adminlar', 'ℹ️ Yordam']], resize_keyboard: true }
+            });
+        }
+
+        if (state.step === 'ask_message') {
+            // Confirm
+            broadcastState.set(userId, { step: 'confirm', message: msg }); // Store entire msg object to copy? Or just text.
+            // For simple broadcast, let's copy the message.
+            try {
+                await bot.copyMessage(chatId, chatId, msg.message_id);
+            } catch (e) { }
+
+            return bot.sendMessage(chatId, '⚠️ <b>Xabarni tasdiqlaysizmi?</b>\n\nBarcha foydalanuvchilarga yuboriladi!', {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '✅ Yuborish', callback_data: 'broadcast_propagate' }],
+                        [{ text: '❌ Bekor qilish', callback_data: 'broadcast_cancel' }]
+                    ]
+                }
+            });
+        }
+    }
+});
+
+// Broadcast Callbacks
+bot.on('callback_query', async (query) => {
+    const { data, message, from } = query;
+    if (data === 'broadcast_cancel') {
+        broadcastState.delete(from.id);
+        await bot.deleteMessage(message.chat.id, message.message_id);
+        return bot.sendMessage(message.chat.id, '❌ Bekor qilindi.', {
+            reply_markup: { keyboard: [['📝 Yangi Sorovnoma', '⚙️ Boshqarish'], ['👤 Adminlar', 'ℹ️ Yordam']], resize_keyboard: true }
+        });
+    }
+    if (data === 'broadcast_propagate') {
+        const state = broadcastState.get(from.id);
+        if (!state || !state.message) return bot.answerCallbackQuery(query.id, { text: 'Eskirgan sessiya.' });
+
+        await bot.editMessageText('⏳ <b>Yuborilmoqda...</b>', { chat_id: message.chat.id, message_id: message.message_id, parse_mode: 'HTML' });
+
+        // Broadcast Loop
+        const users = db.prepare('SELECT user_id FROM users').all();
+        let sent = 0;
+        let blocked = 0;
+
+        // Async Loop to not block event loop
+        // We'll proceed in background
+        (async () => {
+            for (const user of users) {
+                try {
+                    await bot.copyMessage(user.user_id, state.message.chat.id, state.message.message_id);
+                    sent++;
+                } catch (e) {
+                    blocked++;
+                    // Remove if blocked? Nah, just ignore.
+                }
+                // Rate limit: 30 msgs per sec -> 33ms delay
+                await new Promise(r => setTimeout(r, 40));
+            }
+
+            bot.sendMessage(message.chat.id, `✅ <b>Yuborildi!</b>\n\n✅ Qabul qildi: ${sent}\n🚫 Blokladi/Yopdi: ${blocked}`, { parse_mode: 'HTML' });
+        })();
+
+        broadcastState.delete(from.id);
+        return bot.answerCallbackQuery(query.id, { text: 'Boshlandi!' });
+    }
 });
 
 // Handle 'check_sub' callback inside bot
@@ -346,15 +485,37 @@ bot.on('callback_query', async (query) => {
         const pollId = parseInt(query.data.split(':')[1]);
         const userId = query.from.id;
 
-        const requiredChannels = db.prepare('SELECT channel_username FROM required_channels WHERE poll_id = ?').all(pollId).map(r => r.channel_username);
-        const { checkChannelMembership } = require('./voting'); // Lazy import to avoid cycle if any
+        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
+        const { checkChannelMembership, returnLinkMap } = require('./voting'); // Lazy import
         const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
         if (missing.length === 0) {
-            await bot.answerCallbackQuery(query.id, { text: '✅ Rahmat! Endi ovoz berishingiz mumkin.', show_alert: true });
-            await bot.sendMessage(query.message.chat.id, '✅ Muvaffaqiyatli tasdiqlandi. Ovoz berish xabariga qaytib, ovoz bering!');
+            // Success!
+            const returnUrl = returnLinkMap.get(userId);
+            let text = '✅ **Rahmat! Endi ovoz berishingiz mumkin.**';
+            let buttons = [];
+
+            if (returnUrl) {
+                buttons.push([{ text: '🔙 Ovoz berishga qaytish', url: returnUrl }]);
+            }
+
+            await bot.answerCallbackQuery(query.id, { text: '✅ Tasdiqlandi!' });
+
+            // Delete the warning message
+            try { bot.deleteMessage(query.message.chat.id, query.message.message_id); } catch (e) { }
+
+            await bot.sendMessage(query.message.chat.id, text, {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: buttons }
+            });
+
+            // Also send the poll directly to the user
+            const { sendPoll } = require('./voting');
+            await sendPoll(bot, userId, pollId, BOT_USERNAME);
+
         } else {
-            await bot.answerCallbackQuery(query.id, { text: `❌ Hali ${missing.length} ta kanalga a'zo emassiz.`, show_alert: true });
+            const missingTitles = missing.map(m => m.title || 'Kanal').join(', ');
+            await bot.answerCallbackQuery(query.id, { text: `❌ Hali ${missingTitles} ga a'zo bo'lmadingiz.`, show_alert: true });
         }
     }
 });
@@ -508,14 +669,21 @@ bot.on('message', (msg) => {
     }
 });
 
-function listPolls(chatId, onlyOngoing = false) {
-    let query = 'SELECT * FROM polls ORDER BY created_at DESC LIMIT 20';
+function listPolls(chatId, userId, onlyOngoing = false) {
+    const isSuper = isSuperAdmin(userId);
+    let query;
     let params = [];
 
-    if (onlyOngoing) {
-        query = 'SELECT * FROM polls WHERE (start_time IS NULL OR start_time <= ?) AND (end_time IS NULL OR end_time >= ?) ORDER BY created_at DESC LIMIT 20';
-        const now = new Date().toISOString();
-        params = [now, now];
+    if (isSuper) {
+        query = onlyOngoing
+            ? 'SELECT * FROM polls WHERE (start_time IS NULL OR start_time <= CURRENT_TIMESTAMP) AND (end_time IS NULL OR end_time >= CURRENT_TIMESTAMP) ORDER BY created_at DESC LIMIT 20'
+            : 'SELECT * FROM polls ORDER BY created_at DESC LIMIT 20';
+    } else {
+        // Regular Admin: Filter by Creator
+        query = onlyOngoing
+            ? 'SELECT * FROM polls WHERE creator_id = ? AND (start_time IS NULL OR start_time <= CURRENT_TIMESTAMP) AND (end_time IS NULL OR end_time >= CURRENT_TIMESTAMP) ORDER BY created_at DESC LIMIT 20'
+            : 'SELECT * FROM polls WHERE creator_id = ? ORDER BY created_at DESC LIMIT 20';
+        params.push(userId);
     }
 
     const polls = db.prepare(query).all(...params);
@@ -524,12 +692,17 @@ function listPolls(chatId, onlyOngoing = false) {
         return bot.sendMessage(chatId, '📭 So\'rovnomalar topilmadi.');
     }
 
-    let text = onlyOngoing ? '⏳ <b>Davom etayotgan so\'rovnomalar</b>:\n' : '📋 <b>Barcha so\'rovnomalar</b>:\n';
+    let text = onlyOngoing ? '⏳ <b>Davom etayotgan so\'rovnomalar</b>:\n' : '📋 <b>So\'rovnomalarim</b>:\n';
 
     polls.forEach(p => {
         const date = new Date(p.created_at).toLocaleDateString();
-        const status = (p.end_time && new Date() > new Date(p.end_time)) ? '🔒 Yopiq' : '🟢 Ochiq';
-        // HTML escape simple approach or just assume description is clean text. To be safe, just standard text.
+        const start = p.start_time ? new Date(p.start_time) : new Date();
+        const end = p.end_time ? new Date(p.end_time) : null;
+        let status = '🟢 Ochiq';
+
+        if (new Date() < start) status = '⏳ Boshlanmagan';
+        if (end && new Date() > end) status = '🔒 Yopiq';
+
         text += `\n🆔 /manage_${p.id} | 📅 ${date}\n📝 ${p.description.substring(0, 30)}...\nStatus: ${status}\n────────────────`;
     });
 
@@ -567,7 +740,7 @@ bot.onText(/\/newpoll/, (msg) => {
 // Command: /poll <id> (To fetch/share a poll)
 bot.onText(/\/poll (\d+)/, async (msg, match) => {
     const pollId = match[1];
-    await sendPoll(bot, msg.chat.id, pollId);
+    await sendPoll(bot, msg.chat.id, pollId, BOT_USERNAME);
 });
 
 
@@ -609,6 +782,24 @@ bot.on('callback_query', async (query) => {
         return;
     }
 
+    // Start bot callback - redirect to bot
+    if (query.data.startsWith('start_bot:')) {
+        const pollId = query.data.split(':')[1];
+        const startBotUrl = `https://t.me/${BOT_USERNAME}?start=verify_${pollId}`;
+
+        try {
+            await bot.answerCallbackQuery(query.id, { url: startBotUrl });
+            console.log(`[Callback] Redirected user ${query.from.id} to bot`);
+        } catch (e) {
+            console.log(`[Callback] Redirect failed:`, e.message);
+            await bot.answerCallbackQuery(query.id, {
+                text: `⚠️ Botni ishga tushirish uchun @${BOT_USERNAME} ga o'ting`,
+                show_alert: true
+            });
+        }
+        return;
+    }
+
     if (query.data.startsWith('wiz_')) {
         handleWizardCallback(bot, query);
     } else {
@@ -625,7 +816,7 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
     if (param) {
         if (param.startsWith('poll_')) {
             const pollId = param.split('_')[1];
-            return await sendPoll(bot, chatId, pollId);
+            return await sendPoll(bot, chatId, pollId, BOT_USERNAME);
         }
         if (param.startsWith('verify_')) {
             const pollId = param.split('_')[1];
@@ -646,7 +837,7 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
                 return [{ text: `➕ ${display} ga azo bolish`, url: url }];
             });
 
-            buttons.push([{ text: '✅ Tekshirish', callback_data: `check_verify:${pollId}` }]);
+            buttons.push([{ text: '✅ Obuna bo\'ldim', callback_data: `check_sub:${pollId}` }]);
 
             await bot.sendMessage(chatId, '🛑 **Diqqat! Ovoz berish uchun quyidagi kanallarga azo boling:**', {
                 parse_mode: 'Markdown',
@@ -662,7 +853,7 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
         ['📋 Boshqarish (Barchasi)', '⏳ Boshqarish (Aktiv)']
     ];
 
-    if (SUPER_ADMINS.includes(userId)) {
+    if (isSuperAdmin(userId)) {
         keyboard.push(['👥 Adminlar']);
     }
 
@@ -719,7 +910,7 @@ bot.onText(/\/startpoll (\d+)/, (msg, match) => {
 
     if (info.changes > 0) {
         bot.sendMessage(msg.chat.id, `✅ Poll ${pollId} manually started!`);
-        sendPoll(bot, msg.chat.id, pollId); // Show it immediately
+        sendPoll(bot, msg.chat.id, pollId, BOT_USERNAME); // Show it immediately
     } else {
         bot.sendMessage(msg.chat.id, '❌ Poll not found.');
     }
@@ -819,10 +1010,10 @@ bot.on('callback_query', async (query) => {
                 db.prepare('UPDATE polls SET end_time = CURRENT_TIMESTAMP, notified = 1 WHERE id = ?').run(pollId);
                 bot.answerCallbackQuery(query.id, { text: '🛑 Sorovnoma toxtatildi!' });
                 bot.sendMessage(message.chat.id, `🛑 Sorovnoma #${pollId} toxtatildi. Natijalar:`);
-                sendPoll(bot, message.chat.id, pollId);
+                sendPoll(bot, message.chat.id, pollId, BOT_USERNAME);
             } else if (action === 'results') {
                 bot.answerCallbackQuery(query.id);
-                sendPoll(bot, message.chat.id, pollId);
+                sendPoll(bot, message.chat.id, pollId, BOT_USERNAME);
             } else if (action === 'delete') {
                 // Step 1: Request Confirmation
                 const buttons = [
@@ -892,7 +1083,7 @@ bot.on('callback_query', async (query) => {
 
     } else if (data.startsWith('super:')) {
         // Super Admin Actions
-        if (!SUPER_ADMINS.includes(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true });
+        if (!isSuperAdmin(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true });
 
         const parts = data.split(':');
         const action = parts[1];
@@ -930,7 +1121,7 @@ bot.on('callback_query', async (query) => {
 
         if (missing.length === 0) {
             bot.sendMessage(message.chat.id, '✅ Rahmat! Kanallarga a\'zo bo\'ldingiz. Ovoz berishingiz mumkin:');
-            await sendPoll(bot, message.chat.id, pollId);
+            await sendPoll(bot, message.chat.id, pollId, BOT_USERNAME);
             try { bot.deleteMessage(message.chat.id, message.message_id); } catch (e) { }
             bot.answerCallbackQuery(query.id);
         } else {
@@ -988,7 +1179,7 @@ bot.on('inline_query', async (query) => {
 
     if (!pollId) return bot.answerInlineQuery(id, []);
 
-    const content = generatePollContent(pollId);
+    const content = generatePollContent(pollId, BOT_USERNAME);
     if (!content) return bot.answerInlineQuery(id, [], { switch_pm_text: "Sorovnoma topilmadi", switch_pm_parameter: "nopoll" });
 
     const { caption, reply_markup, poll } = content;
@@ -1045,12 +1236,12 @@ function checkPollTimers() {
             // Notify Creator (if we have ID)
             if (poll.creator_id) {
                 bot.sendMessage(poll.creator_id, `🟢 **Sorovnoma Boshlandi** (#${poll.id})\n\nSorovnoma avtomatik ravishda e'lon qilindi.`, { parse_mode: 'Markdown' });
-                await sendPoll(bot, poll.creator_id, poll.id);
+                await sendPoll(bot, poll.creator_id, poll.id, BOT_USERNAME);
             } else {
                 // Fallback: Notify Super Admins if creator unknown
                 SUPER_ADMINS.forEach(adminId => {
                     bot.sendMessage(adminId, `🟢 **Sorovnoma Boshlandi** (#${poll.id}) (Creator Unknown)`);
-                    sendPoll(bot, adminId, poll.id);
+                    sendPoll(bot, adminId, poll.id, BOT_USERNAME);
                 });
             }
         });
@@ -1065,13 +1256,15 @@ function checkPollTimers() {
             db.prepare('UPDATE polls SET notified = 1 WHERE id = ?').run(poll.id);
 
             // Notify Creator
+            const results = getPollResults(poll.id);
             if (poll.creator_id) {
-                bot.sendMessage(poll.creator_id, `🔒 **Sorovnoma Yakunlandi** (#${poll.id})\n\nVaqt tugadi. Natijalar:`, { parse_mode: 'Markdown' });
-                sendPoll(bot, poll.creator_id, poll.id);
+                bot.sendMessage(poll.creator_id, `🔒 **Sorovnoma Yakunlandi** (#${poll.id})\n\n${results}`, { parse_mode: 'Markdown' });
+                // Also Refresh the Poll Message to show "Closed" status
+                sendPoll(bot, poll.creator_id, poll.id, BOT_USERNAME);
             } else {
                 SUPER_ADMINS.forEach(adminId => {
-                    bot.sendMessage(adminId, `🔒 **Sorovnoma Yakunlandi** (#${poll.id})`);
-                    sendPoll(bot, adminId, poll.id);
+                    bot.sendMessage(adminId, `🔒 **Sorovnoma Yakunlandi** (#${poll.id})\n\n${results}`, { parse_mode: 'Markdown' });
+                    sendPoll(bot, adminId, poll.id, BOT_USERNAME);
                 });
             }
         });
