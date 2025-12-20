@@ -224,8 +224,8 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
 
         const stmt = db.prepare(`
             INSERT INTO polls (
-                media_id, media_type, description, settings_json, start_time, end_time, creator_id, published, sticker_file_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                media_id, media_type, description, settings_json, start_time, end_time, creator_id, published
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         // Execute with explicit params to avoid "undefined"
@@ -237,8 +237,7 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             startTimeVal,   // INTEGER or null
             endTimeVal,     // INTEGER or null
             user_id,        // INTEGER (creator_id)
-            published,      // INTEGER (0 or 1)
-            null            // sticker_file_id (removed)
+            published       // INTEGER (0 or 1)
         );
 
         const pollId = info.lastInsertRowid;
