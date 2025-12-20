@@ -10,7 +10,7 @@ const { startWizard, handleWizardStep, handleWizardCallback } = require('./wizar
 const { handleVote, sendPoll, checkChannelMembership, generatePollContent, getPollResults, returnLinkMap } = require('./voting');
 
 const { isAdmin, isSuperAdmin, handleAdminCallback, SUPER_ADMINS } = require('./admin');
-const { saveDraft, getDraft } = require('./drafts');
+const { saveDraft, getDraft, clearDraft } = require('./drafts');
 
 // Global Config
 const webAppUrl = process.env.WEB_APP_URL || 'https://sorovnoma.freeddns.org';
@@ -178,9 +178,11 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             console.log(`[API] Using existing media_id: ${mediaId} (${mediaType})`);
         }
 
+
+
         // Double check strict types for DB
         if (typeof mediaId !== 'string') mediaId = null;
-        if (typeof mediaType !== 'string') mediaType = 'none';
+        if (!mediaType || typeof mediaType !== 'string') mediaType = 'none';
 
         // --- 3. NORMALIZATION & DB INSERT ---
 
@@ -222,8 +224,8 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
 
         const stmt = db.prepare(`
             INSERT INTO polls (
-                media_id, media_type, description, settings_json, start_time, end_time, creator_id, published
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                media_id, media_type, description, settings_json, start_time, end_time, creator_id, published, sticker_file_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         // Execute with explicit params to avoid "undefined"
@@ -235,7 +237,8 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             startTimeVal,   // INTEGER or null
             endTimeVal,     // INTEGER or null
             user_id,        // INTEGER (creator_id)
-            published       // INTEGER (0 or 1)
+            published,      // INTEGER (0 or 1)
+            null            // sticker_file_id (removed)
         );
 
         const pollId = info.lastInsertRowid;
@@ -246,6 +249,15 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
         optionsList.forEach(opt => {
             insertOption.run(pollId, opt);
         });
+
+        // Clear Draft (Consume it)
+        try {
+            const { clearDraft } = require('./drafts');
+            clearDraft(parseInt(user_id));
+            console.log(`[API] Draft cleared for user ${user_id}`);
+        } catch (e) {
+            console.error('[API] Failed to clear draft:', e.message);
+        }
 
         // Save Channels (Phase 3 Prep)
         if (channels) {
@@ -276,8 +288,11 @@ app.post('/api/create-poll', upload.single('media'), async (req, res) => {
             }
         }
 
-        // Send to Creator
+        // Send to Creator with Poll ID
         await sendPoll(bot, user_id, pollId, BOT_USERNAME);
+        await bot.sendMessage(user_id, `✅ **Sorovnoma yaratildi!**\n\n🆔 Poll ID: #${pollId}\n\nBu ID orqali sorovnomani boshqarishingiz mumkin.\nKomanda: /poll\\_${pollId}`, {
+            parse_mode: 'Markdown'
+        });
 
         res.json({ success: true, pollId });
 
@@ -300,6 +315,64 @@ bot.getMe().then(me => {
 
 // --- DEEP LINK HANDLER (Authentication Flow) ---
 // --- DEEP LINK HANDLER & START COMMAND ---
+// Handle /poll_<id> command for direct poll access
+bot.onText(/\/poll_(\d+)/, async (msg, match) => {
+    const pollId = parseInt(match[1]);
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) {
+        return bot.sendMessage(chatId, '❌ Sorovnoma topilmadi.');
+    }
+
+    // Check if user is admin or creator
+    const isSuper = isSuperAdmin(userId);
+    const isCreator = poll.creator_id === userId;
+    const canManage = isSuper || isCreator || isAdmin(userId);
+
+    if (canManage) {
+        // Show management options
+        const buttons = [
+            [{ text: '📊 Natijalar', callback_data: `results:${pollId}` }],
+            [
+                { text: '🟢 Boshlash', callback_data: `admin:start:${pollId}` },
+                { text: '🛑 Toxtatish', callback_data: `admin:stop:${pollId}` }
+            ],
+            [{ text: '📤 Yuborish', callback_data: `send_poll:${pollId}` }],
+            [{ text: '🗑️ O\'chirish', callback_data: `delete:${pollId}` }]
+        ];
+
+        bot.sendMessage(chatId, `🆔 **Poll #${pollId}**\n\n📝 ${poll.description}\n\nQanday amal bajarasiz?`, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: buttons }
+        });
+    } else {
+        // Just send the poll
+        await sendPoll(bot, chatId, pollId, BOT_USERNAME);
+    }
+});
+
+// Handle /newpoll command - redirect to wizard
+bot.onText(/\/newpoll/, async (msg) => {
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+
+    if (!isAdmin(userId)) {
+        return bot.sendMessage(chatId, '⛔ You are not authorized.');
+    }
+
+    // Start wizard: Ask for media directly
+    bot.sendMessage(chatId, '📷 **Media yuklash**\n\nRasm yoki video yuboring yoki o\'tkazib yuboring.', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '⏭️ O\'tkazib yuborish', callback_data: 'wizard:skip_media' }]
+            ]
+        }
+    });
+});
+
 bot.onText(/\/start(.*)/, async (msg, match) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -390,21 +463,100 @@ bot.onText(/\/start(.*)/, async (msg, match) => {
 // BROADCAST STATE
 const broadcastState = new Map();
 
+// CONSOLIDATED MESSAGE HANDLER - handles all message types with proper routing
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     const text = msg.text;
 
-    if (!text) return; // Ignore non-text for menu commands (unless wizard needs files? simplified for now)
 
-    // 1. Check Broadcast Command
+
+    // Handle photos for wizard flow
+    if (msg.photo) {
+        const photoId = msg.photo[msg.photo.length - 1].file_id;
+        saveDraft(userId, 'photo', photoId);
+
+        return bot.sendMessage(chatId, '✅ **Rasm saqlandi!**\n\nEndi sorovnoma ma\'lumotlarini kiriting:', {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '📝 Sorovnoma yaratish', web_app: { url: webAppUrl } }
+                ]]
+            }
+        });
+    }
+
+    // Handle videos for wizard flow
+    if (msg.video) {
+        const videoId = msg.video.file_id;
+        saveDraft(userId, 'video', videoId);
+
+        return bot.sendMessage(chatId, '✅ **Video saqlandi!**\n\nEndi sorovnoma ma\'lumotlarini kiriting:', {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '📝 Sorovnoma yaratish', web_app: { url: webAppUrl } }
+                ]]
+            }
+        });
+    }
+
+    // From here on, only handle text messages
+    if (!text) return;
+
+    // Handle "Yangi Sorovnoma" button
+    if (text === '📝 Yangi Sorovnoma') {
+        if (!isAdmin(userId)) return bot.sendMessage(chatId, '⛔ You are not authorized.');
+
+        return bot.sendMessage(chatId, '📷 **Media yuklash**\n\nRasm yoki video yuboring yoki o\'tkazib yuboring.', {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '⏭️ O\'tkazib yuborish', callback_data: 'wizard:skip_media' }]
+                ]
+            }
+        });
+    }
+
+    // Handle "Boshqarish (Barchasi)" button
+    if (text === '📋 Boshqarish (Barchasi)') {
+        if (!isAdmin(userId)) return;
+        return listPolls(chatId, userId, false);
+    }
+
+    // Handle "Boshqarish (Aktiv)" button
+    if (text === '⏳ Boshqarish (Aktiv)') {
+        if (!isAdmin(userId)) return;
+        return listPolls(chatId, userId, true);
+    }
+
+    // Handle "👤 Adminlar" button
+    if (text === '👤 Adminlar') {
+        if (!isSuperAdmin(userId)) return;
+
+        const admins = db.prepare('SELECT * FROM admins').all();
+        const buttons = admins.map(a => {
+            const roleBadge = a.role === 'super_admin' ? '🌟' : '👤';
+            return [{ text: `${roleBadge} ${a.user_id}`, callback_data: `admin_info:${a.user_id}` }, { text: '🗑️ O\'chirish', callback_data: `super:remove:${a.user_id}` }];
+        });
+
+        buttons.push([{ text: '➕ Admin Qo\'shish', callback_data: 'super:add' }]);
+        buttons.push([{ text: '➕ SUPER Admin Qo\'shish', callback_data: 'super:add_super' }]);
+
+        return bot.sendMessage(chatId, '👮 **Adminlar Boshqaruvi**:\n\n🌟 = Super Admin\n👤 = Oddiy Admin', {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: buttons }
+        });
+    }
+
+    // Handle Broadcast Command
     if (text === '📢 Yangilik Yuborish') {
         if (!isSuperAdmin(userId)) return;
         broadcastState.set(userId, { step: 'ask_message' });
         return bot.sendMessage(chatId, '📢 <b>Yangilik matnini yuboring</b> (rasm/video ham mumkin, lekin hozircha faqat matn/forward qabul qilinadi):\n\nBekor qilish uchun /cancel', { parse_mode: 'HTML', reply_markup: { remove_keyboard: true } });
     }
 
-    // 2. Handle Broadcast State
+    // Handle Broadcast State
     if (broadcastState.has(userId)) {
         const state = broadcastState.get(userId);
         if (text === '/cancel') {
@@ -416,8 +568,7 @@ bot.on('message', async (msg) => {
 
         if (state.step === 'ask_message') {
             // Confirm
-            broadcastState.set(userId, { step: 'confirm', message: msg }); // Store entire msg object to copy? Or just text.
-            // For simple broadcast, let's copy the message.
+            broadcastState.set(userId, { step: 'confirm', message: msg });
             try {
                 await bot.copyMessage(chatId, chatId, msg.message_id);
             } catch (e) { }
@@ -436,89 +587,10 @@ bot.on('message', async (msg) => {
 });
 
 // Broadcast Callbacks
-bot.on('callback_query', async (query) => {
-    const { data, message, from } = query;
-    if (data === 'broadcast_cancel') {
-        broadcastState.delete(from.id);
-        await bot.deleteMessage(message.chat.id, message.message_id);
-        return bot.sendMessage(message.chat.id, '❌ Bekor qilindi.', {
-            reply_markup: { keyboard: [['📝 Yangi Sorovnoma', '⚙️ Boshqarish'], ['👤 Adminlar', 'ℹ️ Yordam']], resize_keyboard: true }
-        });
-    }
-    if (data === 'broadcast_propagate') {
-        const state = broadcastState.get(from.id);
-        if (!state || !state.message) return bot.answerCallbackQuery(query.id, { text: 'Eskirgan sessiya.' });
 
-        await bot.editMessageText('⏳ <b>Yuborilmoqda...</b>', { chat_id: message.chat.id, message_id: message.message_id, parse_mode: 'HTML' });
-
-        // Broadcast Loop
-        const users = db.prepare('SELECT user_id FROM users').all();
-        let sent = 0;
-        let blocked = 0;
-
-        // Async Loop to not block event loop
-        // We'll proceed in background
-        (async () => {
-            for (const user of users) {
-                try {
-                    await bot.copyMessage(user.user_id, state.message.chat.id, state.message.message_id);
-                    sent++;
-                } catch (e) {
-                    blocked++;
-                    // Remove if blocked? Nah, just ignore.
-                }
-                // Rate limit: 30 msgs per sec -> 33ms delay
-                await new Promise(r => setTimeout(r, 40));
-            }
-
-            bot.sendMessage(message.chat.id, `✅ <b>Yuborildi!</b>\n\n✅ Qabul qildi: ${sent}\n🚫 Blokladi/Yopdi: ${blocked}`, { parse_mode: 'HTML' });
-        })();
-
-        broadcastState.delete(from.id);
-        return bot.answerCallbackQuery(query.id, { text: 'Boshlandi!' });
-    }
-});
 
 // Handle 'check_sub' callback inside bot
-bot.on('callback_query', async (query) => {
-    if (query.data.startsWith('check_sub:')) {
-        const pollId = parseInt(query.data.split(':')[1]);
-        const userId = query.from.id;
 
-        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
-        const { checkChannelMembership, returnLinkMap } = require('./voting'); // Lazy import
-        const missing = await checkChannelMembership(bot, userId, requiredChannels);
-
-        if (missing.length === 0) {
-            // Success!
-            const returnUrl = returnLinkMap.get(userId);
-            let text = '✅ **Rahmat! Endi ovoz berishingiz mumkin.**';
-            let buttons = [];
-
-            if (returnUrl) {
-                buttons.push([{ text: '🔙 Ovoz berishga qaytish', url: returnUrl }]);
-            }
-
-            await bot.answerCallbackQuery(query.id, { text: '✅ Tasdiqlandi!' });
-
-            // Delete the warning message
-            try { bot.deleteMessage(query.message.chat.id, query.message.message_id); } catch (e) { }
-
-            await bot.sendMessage(query.message.chat.id, text, {
-                parse_mode: 'Markdown',
-                reply_markup: { inline_keyboard: buttons }
-            });
-
-            // Also send the poll directly to the user
-            const { sendPoll } = require('./voting');
-            await sendPoll(bot, userId, pollId, BOT_USERNAME);
-
-        } else {
-            const missingTitles = missing.map(m => m.title || 'Kanal').join(', ');
-            await bot.answerCallbackQuery(query.id, { text: `❌ Hali ${missingTitles} ga a'zo bo'lmadingiz.`, show_alert: true });
-        }
-    }
-});
 
 // (Middleware removed - imported from admin.js)
 
@@ -588,62 +660,50 @@ const MENUS = {
     }
 };
 
-// Handle "Yangi Sorovnoma"
+// Handle "ℹ️ Yordam" - Show help
 bot.on('message', (msg) => {
-    if (msg.text === '📝 Yangi Sorovnoma') {
-        if (!isAdmin(msg.from.id)) return bot.sendMessage(msg.chat.id, '⛔ You are not authorized.');
+    if (msg.text === 'ℹ️ Yordam') {
+        const helpText = `📖 **Yordam**\n\n` +
+            `**Sorovnoma yaratish:**\n` +
+            `1. "📝 Yangi Sorovnoma" tugmasini bosing\n` +
+            `2. Media yuklang (ixtiyoriy)\n` +
+            `3. Formani to'ldiring\n` +
+            `4. "Yaratish" tugmasini bosing\n\n` +
+            `**Sorovnomalarni boshqarish:**\n` +
+            `- "⚙️ Boshqarish" tugmasidan foydalaning\n` +
+            `- Sorovnomani boshlash, to'xtatish yoki o'chirish mumkin\n\n` +
+            `**Yordam kerakmi?**\n` +
+            `Admin bilan bog'laning: @support`;
 
-        bot.sendMessage(msg.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nAvval media fayl yuklaysizmi yoki birdaniga boshlaysizmi?', {
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: "📷 Rasm", callback_data: "newpoll:photo" },
-                        { text: "🎥 Video", callback_data: "newpoll:video" }
-                    ],
-                    [
-                        { text: "⏭️ O'tkazib yuborish (Skip)", callback_data: "newpoll:skip" }
-                    ]
-                ]
-            }
-        });
+        bot.sendMessage(msg.chat.id, helpText, { parse_mode: 'Markdown' });
     }
 });
 
-// Handle "Boshqarish (Barchasi)"
+// Handle "📊 Statistika" - Show statistics
 bot.on('message', (msg) => {
-    if (msg.text === '📋 Boshqarish (Barchasi)') {
+    if (msg.text === '📊 Statistika') {
         if (!isAdmin(msg.from.id)) return;
-        listPolls(msg.chat.id);
-    }
-});
 
-// Handle "Boshqarish (Aktiv)"
-bot.on('message', (msg) => {
-    if (msg.text === '⏳ Boshqarish (Aktiv)') {
-        if (!isAdmin(msg.from.id)) return;
-        listPolls(msg.chat.id, true);
-    }
-});
+        const userId = msg.from.id;
+        const isSuper = isSuperAdmin(userId);
 
-// Handle "👥 Adminlar" (Super Admin Only)
-bot.on('message', (msg) => {
-    if (msg.text === '👥 Adminlar') {
-        if (!isSuperAdmin(msg.from.id)) return;
+        let pollCount, voteCount;
+        if (isSuper) {
+            pollCount = db.prepare('SELECT COUNT(*) as count FROM polls').get().count;
+            voteCount = db.prepare('SELECT COUNT(*) as count FROM votes').get().count;
+        } else {
+            pollCount = db.prepare('SELECT COUNT(*) as count FROM polls WHERE creator_id = ?').get(userId).count;
+            voteCount = db.prepare('SELECT COUNT(*) as count FROM votes WHERE poll_id IN (SELECT id FROM polls WHERE creator_id = ?)').get(userId).count;
+        }
 
-        const admins = db.prepare('SELECT * FROM admins').all();
-        const buttons = admins.map(a => {
-            const roleBadge = a.role === 'super_admin' ? '🌟' : '👤';
-            return [{ text: `${roleBadge} ${a.user_id}`, callback_data: `admin_info:${a.user_id}` }, { text: '🗑️ O\'chirish', callback_data: `super:remove:${a.user_id}` }];
-        });
+        const userCount = db.prepare('SELECT COUNT(*) as count FROM users').get().count;
 
-        buttons.push([{ text: '➕ Admin Qo\'shish', callback_data: 'super:add' }]);
-        buttons.push([{ text: '➕ SUPER Admin Qo\'shish', callback_data: 'super:add_super' }]);
+        const statsText = `📊 **Statistika**\n\n` +
+            `📝 Sorovnomalar: ${pollCount}\n` +
+            `✅ Ovozlar: ${voteCount}\n` +
+            `👥 Foydalanuvchilar: ${userCount}`;
 
-        bot.sendMessage(msg.chat.id, '👮 **Adminlar Boshqaruvi**:\n\n🌟 = Super Admin\n👤 = Oddiy Admin', {
-            parse_mode: 'Markdown',
-            reply_markup: { inline_keyboard: buttons }
-        });
+        bot.sendMessage(msg.chat.id, statsText, { parse_mode: 'Markdown' });
     }
 });
 
@@ -754,6 +814,7 @@ bot.onText(/\/poll (\d+)/, async (msg, match) => {
 // Handle Callback Queries (Voting & Wizard)
 bot.on('callback_query', async (query) => {
     console.log(`[Callback] From: ${query.from.id}, Data: ${query.data}`);
+    const { data } = query;
 
     // Verify check callback
     if (query.data.startsWith('check_verify:')) {
@@ -782,6 +843,66 @@ bot.on('callback_query', async (query) => {
         return;
     }
 
+    // Broadcast Callbacks (Merged)
+    if (data === 'broadcast_cancel') {
+        broadcastState.delete(query.from.id);
+        await bot.deleteMessage(query.message.chat.id, query.message.message_id);
+        return bot.sendMessage(query.message.chat.id, '❌ Bekor qilindi.', {
+            reply_markup: { keyboard: [['📝 Yangi Sorovnoma', '⚙️ Boshqarish'], ['👤 Adminlar', 'ℹ️ Yordam']], resize_keyboard: true }
+        });
+    }
+    if (data === 'broadcast_propagate') {
+        const state = broadcastState.get(query.from.id);
+        if (!state || !state.message) return bot.answerCallbackQuery(query.id, { text: 'Eskirgan sessiya.' });
+
+        await bot.editMessageText('⏳ <b>Yuborilmoqda...</b>', { chat_id: query.message.chat.id, message_id: query.message.message_id, parse_mode: 'HTML' });
+
+        // Broadcast Loop
+        const users = db.prepare('SELECT user_id FROM users').all();
+        let sent = 0;
+        let blocked = 0;
+
+        (async () => {
+            for (const user of users) {
+                try {
+                    await bot.copyMessage(user.user_id, state.message.chat.id, state.message.message_id);
+                    sent++;
+                } catch (e) { blocked++; }
+                await new Promise(r => setTimeout(r, 40));
+            }
+            bot.sendMessage(query.message.chat.id, `✅ <b>Yuborildi!</b>\n\n✅ Qabul qildi: ${sent}\n🚫 Blokladi/Yopdi: ${blocked}`, { parse_mode: 'HTML' });
+        })();
+
+        broadcastState.delete(query.from.id);
+        return bot.answerCallbackQuery(query.id, { text: 'Boshlandi!' });
+    }
+
+    if (data.startsWith('check_sub:')) {
+        const pollId = parseInt(data.split(':')[1]);
+        const userId = query.from.id;
+
+        const { checkChannelMembership, updatePollMessage } = require('./voting');
+        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
+        const missing = await checkChannelMembership(bot, userId, requiredChannels);
+
+        if (missing.length === 0) {
+            await bot.answerCallbackQuery(query.id, { text: '✅ Tasdiqlandi! Ovoz berishingiz mumkin.', show_alert: true });
+
+            // Restore the Poll UI (Refresh)
+            // This works for both Inline and Regular messages
+            const chatId = query.message ? query.message.chat.id : null;
+            const messageId = query.message ? query.message.message_id : null;
+            const inlineMessageId = query.inline_message_id;
+
+            await updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId, BOT_USERNAME);
+
+        } else {
+            const missingTitles = missing.map(m => m.title || 'Kanal').join(', ');
+            await bot.answerCallbackQuery(query.id, { text: `❌ Hali ${missingTitles} ga a'zo bo'lmadingiz.`, show_alert: true });
+        }
+        return;
+    }
+
     // Start bot callback - redirect to bot
     if (query.data.startsWith('start_bot:')) {
         const pollId = query.data.split(':')[1];
@@ -797,6 +918,110 @@ bot.on('callback_query', async (query) => {
                 show_alert: true
             });
         }
+        return;
+    }
+
+    // Handle management callbacks
+    if (query.data === 'manage:all') {
+        await bot.answerCallbackQuery(query.id);
+        listPolls(query.message.chat.id, query.from.id, false);
+        return;
+    }
+
+    if (query.data === 'manage:active') {
+        await bot.answerCallbackQuery(query.id);
+        listPolls(query.message.chat.id, query.from.id, true);
+        return;
+    }
+
+    // Handle results callback
+    if (query.data.startsWith('results:')) {
+        const pollId = parseInt(query.data.split(':')[1]);
+        const userId = query.from.id;
+
+        // Check if user is admin or poll creator
+        const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+        if (!poll) {
+            return bot.answerCallbackQuery(query.id, { text: '❌ Sorovnoma topilmadi', show_alert: true });
+        }
+
+        const isSuper = isSuperAdmin(userId);
+        const isCreator = poll.creator_id === userId;
+
+        if (!isSuper && !isCreator) {
+            return bot.answerCallbackQuery(query.id, { text: '⛔ Faqat admin va yaratuvchi ko\'ra oladi', show_alert: true });
+        }
+
+        // Get poll results
+        const options = db.prepare('SELECT * FROM options WHERE poll_id = ? ORDER BY id').all(pollId);
+        const votes = db.prepare('SELECT option_id, COUNT(*) as count FROM votes WHERE poll_id = ? GROUP BY option_id').all(pollId);
+
+        const voteCounts = {};
+        votes.forEach(v => voteCounts[v.option_id] = v.count);
+
+        const totalVotes = votes.reduce((sum, v) => sum + v.count, 0);
+
+        let resultsText = `📊 **Sorovnoma Natijalari**\n\n`;
+        resultsText += `🆔 Poll ID: #${pollId}\n`;
+        resultsText += `📝 ${poll.description}\n\n`;
+        resultsText += `📈 **Natijalar:**\n\n`;
+
+        options.forEach(opt => {
+            const count = voteCounts[opt.id] || 0;
+            const percentage = totalVotes > 0 ? ((count / totalVotes) * 100).toFixed(1) : 0;
+            resultsText += `${opt.text}\n`;
+            resultsText += `  ✅ ${count} ovoz (${percentage}%)\n\n`;
+        });
+
+        resultsText += `\n👥 Jami: ${totalVotes} ovoz`;
+
+        await bot.answerCallbackQuery(query.id);
+        bot.sendMessage(userId, resultsText, { parse_mode: 'Markdown' });
+        return;
+    }
+
+    // Wizard callbacks
+
+    if (query.data === 'wizard:skip_media') {
+        await bot.answerCallbackQuery(query.id);
+        // Open Mini App directly
+        bot.sendMessage(query.message.chat.id, '📝 **Sorovnoma ma\'lumotlarini kiriting:**', {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '📝 Sorovnoma yaratish', web_app: { url: webAppUrl } }
+                ]]
+            }
+        });
+        return;
+    }
+
+    // Close message callback
+    if (query.data === 'close_msg') {
+        try {
+            await bot.deleteMessage(query.message.chat.id, query.message.message_id);
+            await bot.answerCallbackQuery(query.id);
+        } catch (e) {
+            await bot.answerCallbackQuery(query.id, { text: 'Xabar ochirildi' });
+        }
+        return;
+    }
+
+    if (query.data === 'wizard:skip_media') {
+        console.log(`[Wizard] Skipping media for user ${query.from.id}, clearing draft...`);
+        const { clearDraft } = require('./drafts');
+        clearDraft(query.from.id);
+
+        await bot.answerCallbackQuery(query.id);
+        // Open Mini App directly
+        bot.sendMessage(query.message.chat.id, '📝 **Sorovnoma ma\'lumotlarini kiriting:**', {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [[
+                    { text: '📝 Sorovnoma yaratish', web_app: { url: webAppUrl } }
+                ]]
+            }
+        });
         return;
     }
 
@@ -882,9 +1107,13 @@ bot.onText(/\/closepoll (\d+)/, (msg, match) => {
     }
 });
 
-// Handle Text Messages (for Wizard)
+// Handle// Log all messages for debugging
 bot.on('message', (msg) => {
-    console.log(`[Message] From: ${msg.from.id} (${msg.from.username}), Text: ${msg.text}`);
+    const messageType = msg.text ? `Text: ${msg.text}` :
+        msg.sticker ? 'Sticker' :
+            msg.photo ? 'Photo' :
+                msg.video ? 'Video' : 'Other';
+    console.log(`[Message] From: ${msg.from.id} (${msg.from.username}), ${messageType}`);
     // Ignore commands handled by onText
     if (msg.text && msg.text.startsWith('/')) return;
 
@@ -922,9 +1151,13 @@ bot.on('callback_query', async (query) => {
 
     if (data.startsWith('newpoll:')) {
         const type = data.split(':')[1];
-        const webAppUrl = process.env.WEB_APP_URL || 'https://sorovnoma.freeddns.org';
+
 
         if (type === 'skip') {
+            const { clearDraft } = require('./drafts');
+            clearDraft(from.id);
+            console.log(`[NewPoll] User ${from.id} skipped media, cleared draft.`);
+
             bot.sendMessage(message.chat.id, '📝 <b>Yangi Sorovnoma Yaratish</b>\n\nBoshlash uchun tugmani bosing:', {
                 parse_mode: 'HTML',
                 reply_markup: {
@@ -1112,6 +1345,53 @@ bot.on('callback_query', async (query) => {
             });
             bot.answerCallbackQuery(query.id);
         }
+
+    } else if (data.startsWith('admin:start:')) {
+        const pollId = parseInt(data.split(':')[1]);
+        if (!pollId) return bot.answerCallbackQuery(query.id, { text: '❌ Xatolik' });
+
+        // Check permissions (Admin/Creator) - reusing existing logic check
+        // Ideally should check DB but we trust the button visibility for now or do quick check
+        // For security let's do quick check
+        const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+        if (!poll) return bot.answerCallbackQuery(query.id, { text: '❌ Poll not found' });
+        if (!isSuperAdmin(from.id) && !isAdmin(from.id) && poll.creator_id !== from.id) {
+            return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true });
+        }
+
+        db.prepare('UPDATE polls SET published = 1 WHERE id = ?').run(pollId);
+        bot.answerCallbackQuery(query.id, { text: '✅ Sorovnoma Boshlandi!' });
+        bot.sendMessage(message.chat.id, `🟢 **Sorovnoma #${pollId} boshlandi!**\n\nEndi foydalanuvchilar ovoz berishi mumkin.`, { parse_mode: 'Markdown' });
+
+    } else if (data.startsWith('admin:stop:')) {
+        const pollId = parseInt(data.split(':')[1]);
+        if (!pollId) return bot.answerCallbackQuery(query.id, { text: '❌ Xatolik' });
+
+        const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+        if (!poll) return bot.answerCallbackQuery(query.id, { text: '❌ Poll not found' });
+        if (!isSuperAdmin(from.id) && !isAdmin(from.id) && poll.creator_id !== from.id) {
+            return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true });
+        }
+
+        db.prepare('UPDATE polls SET published = 0 WHERE id = ?').run(pollId);
+        bot.answerCallbackQuery(query.id, { text: '🛑 Sorovnoma To\'xtatildi!' });
+        bot.sendMessage(message.chat.id, `🛑 **Sorovnoma #${pollId} to'xtatildi!**\n\nEndi ovoz berish imkonsiz.`, { parse_mode: 'Markdown' });
+
+    } else if (data.startsWith('delete:') || data.startsWith('admin:delete:')) {
+        const parts = data.split(':');
+        const pollId = parseInt(parts[parts.length - 1]); // Handle both delete:ID and admin:delete:ID
+
+        const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+        if (!poll) return bot.answerCallbackQuery(query.id, { text: '❌ Allaqachon o\'chirilgan' });
+
+        if (!isSuperAdmin(from.id) && !isAdmin(from.id) && poll.creator_id !== from.id) {
+            return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true });
+        }
+
+        db.prepare('DELETE FROM polls WHERE id = ?').run(pollId);
+        bot.answerCallbackQuery(query.id, { text: '🗑️ O\'chirildi' });
+        bot.deleteMessage(message.chat.id, message.message_id);
+        bot.sendMessage(message.chat.id, `🗑️ **Sorovnoma #${pollId} o'chirib tashlandi.**`, { parse_mode: 'Markdown' });
 
     } else if (data.startsWith('check_verify:')) {
         const pollId = data.split(':')[1];
@@ -1381,70 +1661,4 @@ process.on('unhandledRejection', (reason, promise) => {
 
 console.log('[System] Bot is ready and running.');
 
-// --- MEDIA LISTENERS (For Drafts) ---
-// --- MEDIA LISTENERS (For Drafts) ---
 
-async function sendMediaDraftResponse(bot, msg, mediaType, fileId) {
-    const chatId = msg.chat.id;
-    const chatType = msg.chat.type;
-
-    // Save draft
-    try {
-        saveDraft(msg.from.id, mediaType, fileId);
-    } catch (e) {
-        console.error('Draft Save Error:', e);
-    }
-
-    let reply_markup;
-
-    if (chatType === 'private') {
-        reply_markup = {
-            inline_keyboard: [[
-                { text: "📲 Sorovnoma Yaratishni Boshlash", web_app: { url: webAppUrl } }
-            ]]
-        };
-    } else {
-        // Group/Channel: Sending web_app button here causes BUTTON_TYPE_INVALID
-        // Send a deep link to the bot instead
-        reply_markup = {
-            inline_keyboard: [[
-                { text: "🤖 Botga o'tish (Sorovnoma yaratish)", url: `https://t.me/${BOT_USERNAME}?start=newpoll` }
-            ]]
-        };
-    }
-
-    const text = mediaType === 'video'
-        ? '✅ Video qabul qilindi! Endi davom etishingiz mumkin:'
-        : '✅ Rasm qabul qilindi! Endi davom etishingiz mumkin:';
-
-    try {
-        await bot.sendMessage(chatId, text, { reply_markup });
-    } catch (e) {
-        console.error(`[CRITICAL] Failed to send draft response to ${chatId}:`, e.message);
-    }
-}
-
-bot.on('photo', (msg) => {
-    if (msg.chat.type !== 'private') return; // Ignore groups
-    if (!isAdmin(msg.from.id)) return;
-    const photo = msg.photo[msg.photo.length - 1]; // Largest
-    sendMediaDraftResponse(bot, msg, 'photo', photo.file_id);
-});
-
-bot.on('video', (msg) => {
-    if (msg.chat.type !== 'private') return; // Ignore groups
-    if (!isAdmin(msg.from.id)) return;
-    sendMediaDraftResponse(bot, msg, 'video', msg.video.file_id);
-});
-
-bot.on('document', (msg) => {
-    if (msg.chat.type !== 'private') return; // Ignore groups
-    if (!isAdmin(msg.from.id)) return;
-    if (!msg.document || !msg.document.mime_type) return;
-
-    if (msg.document.mime_type.startsWith('video/')) {
-        sendMediaDraftResponse(bot, msg, 'video', msg.document.file_id);
-    } else if (msg.document.mime_type.startsWith('image/')) {
-        sendMediaDraftResponse(bot, msg, 'photo', msg.document.file_id);
-    }
-});

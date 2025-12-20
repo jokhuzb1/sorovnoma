@@ -9,8 +9,6 @@ document.body.style.setProperty('--tg-theme-text-color', tg.themeParams.text_col
 const submitBtn = document.getElementById('submitBtn');
 const addOptionBtn = document.getElementById('addOptionBtn');
 const optionsContainer = document.getElementById('optionsContainer');
-const fileInput = document.getElementById('mediaInput');
-const fileLabel = document.getElementById('fileLabel');
 
 // Add Option Logic
 addOptionBtn.addEventListener('click', () => {
@@ -27,17 +25,11 @@ addOptionBtn.addEventListener('click', () => {
     if (newInput) newInput.focus();
 });
 
-// File Preview Logic
-fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        fileLabel.innerText = '✅ Fajl tanlandi: ' + e.target.files[0].name;
-    }
-});
-
-// Draft Media Logic
+// Draft Media Logic - media and stickers are sent to bot before Mini App opens
 let draftMedia = null;
+let draftSticker = null;
 
-// Auto-Run on Init
+// Auto-Run on Init - fetch draft media/sticker
 if (tg.initDataUnsafe?.user?.id) {
     const userId = tg.initDataUnsafe.user.id;
     fetch(`/api/draft-media?user_id=${userId}`)
@@ -45,17 +37,7 @@ if (tg.initDataUnsafe?.user?.id) {
         .then(data => {
             if (data.media) {
                 draftMedia = data.media;
-                // Show Card
-                const mediaCard = document.getElementById('mediaCard');
-                if (mediaCard) mediaCard.style.display = 'block';
-
-                // Update UI
-                const typeName = draftMedia.type === 'video' ? 'Video' : 'Rasm';
-                fileLabel.innerHTML = `✅ <b>${typeName} biriktirildi</b> (Chatdan olindi)`;
-                fileLabel.className = 'w-full p-4 border-2 border-green-500 border-dashed rounded-xl text-center text-green-600 bg-green-50 cursor-not-allowed';
-
-                // Add Reset Button (Optional, but good for UX)
-                // For now, simplicity: if they want to change, they send new media to bot or just use this.
+                console.log('Draft media loaded:', draftMedia);
             }
         })
         .catch(err => console.error('Draft Check Failed:', err));

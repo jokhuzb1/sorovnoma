@@ -51,21 +51,16 @@ function generatePollContent(pollId, botUsername) {
     const settings = JSON.parse(poll.settings_json || '{}');
     const mode = settings.multiple_choice ? 'Kop tanlov' : 'Bitta tanlov';
 
-    let status = 'Ochiq';
-    const now = new Date();
-    if (poll.start_time && now < new Date(poll.start_time)) status = `Boshlanadi: ${new Date(poll.start_time).toLocaleString()}`;
-    if (poll.end_time && now > new Date(poll.end_time)) status = 'Yopilgan 🔒';
+    // Simple caption without status
+    let caption = `${poll.description}`;
 
-    // Blind Voting: No stats in caption
-    let caption = `${poll.description}\n\n🕒 Holat: ${status}`;
-
-    // Show vote counts in buttons
+    // Show vote counts in buttons - clean format without emojis
     const inline_keyboard = options.map(opt => [{
-        text: `⚪️ ${opt.text} (${countsMap[opt.id] || 0})`,
+        text: `${opt.text} (${countsMap[opt.id] || 0})`,
         callback_data: `vote:${pollId}:${opt.id}`
     }]);
 
-    // Add Share Button AND Refresh Button
+    // Add Share and Refresh buttons
     inline_keyboard.push([
         { text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` },
         { text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }
@@ -79,17 +74,13 @@ function generateJoinBotPoll(pollId, botUsername) {
     const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
     if (!poll) return null;
 
-    let status = 'Ochiq';
-    const now = new Date();
-    if (poll.start_time && now < new Date(poll.start_time)) status = `Boshlanadi: ${new Date(poll.start_time).toLocaleString()}`;
-    if (poll.end_time && now > new Date(poll.end_time)) status = 'Yopilgan 🔒';
-
-    let caption = `${poll.description}\n\n🕒 Holat: ${status}`;
+    // Simple caption without status
+    let caption = `${poll.description}`;
 
     const startBotUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
     const inline_keyboard = [
         [{ text: '🤖 Kanallarga Qo\'shilish (Botni Boshlash)', url: startBotUrl }],
-        [{ text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }]
+        [{ text: '✅ Obuna bo\'ldim', callback_data: `check_sub:${pollId}` }]
     ];
 
     return { caption, reply_markup: { inline_keyboard }, poll };
@@ -134,7 +125,7 @@ setInterval(async () => {
 
     for (const batch of batches) {
         await Promise.all(batch.map(u =>
-            updatePollMessage(u.bot, u.chatId, u.messageId, u.pollId, u.inlineMessageId)
+            updatePollMessage(u.bot, u.chatId, u.messageId, u.pollId, u.inlineMessageId, u.botUsername)
                 .catch(e => console.error('Update Failed:', e.message))
         ));
     }
@@ -200,6 +191,7 @@ async function handleVote(bot, query, botUsername) {
             return bot.answerCallbackQuery(id, { text: '🔄 Yangilandi' });
         }
 
+
         if (type !== 'vote') return bot.answerCallbackQuery(id); // Just close for non-votes
 
         // console.log(`[Vote] User: ${userId}, Poll: ${pollId}, Option: ${optionId}`);
@@ -246,10 +238,10 @@ async function handleVote(bot, query, botUsername) {
                         returnLinkMap.set(userId, `https://t.me/${message.chat.username}/${message.message_id}`);
                     }
 
-                    // CRITICAL: Answer callback IMMEDIATELY to prevent timeout
+                    // Answer callback immediately
                     await bot.answerCallbackQuery(id, {
-                        text: '⚠️ Kanallarga a\'zo bo\'lishingiz kerak!',
-                        show_alert: false
+                        text: '⚠️ Avval kanallarga a\'zo bo\'ling!',
+                        show_alert: true
                     });
 
                     // Generate "Join Bot" version of the poll
@@ -258,14 +250,14 @@ async function handleVote(bot, query, botUsername) {
                         return;
                     }
 
-                    // Update the poll message to show "Join Bot" button
+                    // Replace poll buttons with verification buttons
                     try {
                         if (inline_message_id) {
                             await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { inline_message_id });
                         } else if (chatId && messageId) {
                             await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { chat_id: chatId, message_id: messageId });
                         }
-                        console.log(`[DEBUG] Replaced poll buttons for user ${userId}`);
+                        console.log(`[DEBUG] Replaced poll buttons for verification`);
                     } catch (e) {
                         console.log(`[DEBUG] Failed to replace buttons:`, e.message);
                     }
@@ -328,7 +320,7 @@ async function handleVote(bot, query, botUsername) {
             return bot.answerCallbackQuery(id, { text: txError.message, show_alert: true });
         }
 
-        // Send Success Popup Alert
+        // Send Success Toast Notification (not blocking alert)
         bot.answerCallbackQuery(id, { text: `✅ ${successMessage}`, show_alert: true });
 
         // Queue UI Update
@@ -337,7 +329,7 @@ async function handleVote(bot, query, botUsername) {
         const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
 
         if (!updateQueue.has(key)) {
-            updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id });
+            updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id, botUsername });
         }
 
     } catch (error) {
@@ -374,13 +366,19 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
     }
 }
 
-async function sendPoll(bot, chatId, pollId, botUsername = null) {
+async function sendPoll(bot, chatId, pollId, botUsername) {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return false;
+
     const content = generatePollContent(pollId, botUsername);
     if (!content) return false;
 
-    const { caption, reply_markup, poll } = content;
+    const { caption, reply_markup } = content;
+
+
 
     try {
+        // Then send media/poll
         if (poll.media_type === 'photo') {
             await bot.sendPhoto(chatId, poll.media_id, { caption, reply_markup });
         } else if (poll.media_type === 'video') {

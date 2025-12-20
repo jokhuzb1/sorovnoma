@@ -87,4 +87,6 @@ migrations.forEach(query => {
     }
 });
 
+
+
 module.exports = db;
