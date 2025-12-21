@@ -7,6 +7,23 @@ const { handleAdminCallback, handleSuperAdminAction, refreshManagementMessage, h
 const { handleWizardCallback } = require('./handlers/wizardHandler');
 const { MESSAGES } = require('./config/constants');
 const { generateSharablePollContent, sendPoll } = require('./services/pollService');
+const { SUPER_ADMINS } = require('./services/adminService');
+
+// Notification Helper
+const notifyAdmins = async (error) => {
+    const errorMsg = `🚨 **BOT ERROR:**\n\n\`${error.message || error}\``;
+    /*
+    for (const adminId of SUPER_ADMINS) {
+        try {
+            await bot.sendMessage(adminId, errorMsg, { parse_mode: 'Markdown' });
+        } catch (e) { console.error('Notify fail:', e.message); }
+    }
+    */
+    // Use Promise.all for speed
+    await Promise.all(SUPER_ADMINS.map(id =>
+        bot.sendMessage(id, errorMsg, { parse_mode: 'Markdown' }).catch(e => console.error('Notify fail:', e.message))
+    ));
+};
 
 if (!process.env.BOT_TOKEN) {
     console.error('BOT_TOKEN missing');
@@ -48,7 +65,10 @@ bot.onText(/\/add_admin (\d+) ?(.*)/, (msg, match) => {
 });
 
 bot.on('message', (msg) => {
-    handleMessage(bot, msg).catch(e => console.error('HandleMessage Error:', e));
+    handleMessage(bot, msg).catch(async (e) => {
+        console.error('HandleMessage Error:', e);
+        await notifyAdmins(e);
+    });
 });
 
 bot.on('callback_query', async (query) => {
@@ -139,6 +159,14 @@ bot.on('inline_query', async (query) => {
     }
 });
 
-bot.on('polling_error', (error) => {
-    console.error(error); // Parse errors
+// Global Error Handlers
+process.on('uncaughtException', async (error) => {
+    console.error('Uncaught Exception:', error);
+    await notifyAdmins(`Uncaught Exception: ${error.message}\nStack: ${error.stack}`);
+    // process.exit(1); // Optional: restart if using Docker/PM2 (recommended)
+});
+
+process.on('unhandledRejection', async (reason, promise) => {
+    console.error('Unhandled Rejection:', reason);
+    await notifyAdmins(`Unhandled Rejection: ${reason.message || reason}`);
 });
