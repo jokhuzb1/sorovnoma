@@ -1,4 +1,4 @@
-// Circular dep handled by local implementation
+const db = require('../database/db');
 
 
 function generatePollContent(pollId, botUsername) {
