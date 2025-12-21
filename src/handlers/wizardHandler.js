@@ -102,7 +102,13 @@ const handleWizardStep = async (bot, msg) => {
         sessionService.updateWizardSession(userId, { data: { ...session.data, options: currentOptions } });
 
         const count = currentOptions.length;
-        const optsText = currentOptions.map((o, i) => `${i + 1}. ${o}`).join('\n');
+        let optsText = currentOptions.map((o, i) => `${i + 1}. ${o}`).join('\n');
+
+        // Truncate options text if too long (Telegram limit 4096)
+        if (optsText.length > 3000) {
+            optsText = optsText.substring(0, 2997) + '...';
+        }
+
         const keyboard = [];
         if (count >= 2) keyboard.push([{ text: '✅ Tayyor', callback_data: 'wiz_options_done' }]);
 
