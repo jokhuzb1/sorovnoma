@@ -101,19 +101,24 @@ async function handleVote(bot, query, botUsername) {
         // Return to Channel Logic (if voted successfully and channels required)
         if (msg.includes('qabul qilindi') && requiredChannels.length > 0) {
             const firstChannel = requiredChannels[0];
-            const channelUrl = firstChannel.url || `https://t.me/${firstChannel.username.replace('@', '')}`;
+            let channelUrl = firstChannel.url;
+            if (!channelUrl && firstChannel.username) {
+                channelUrl = `https://t.me/${firstChannel.username.replace('@', '')}`;
+            }
 
-            // Send ephemeral hint or private message? 
-            // Since this is callback, we can't open URL and alert.
-            // We'll send a message to the user.
-            try {
-                await bot.sendMessage(userId, '✅ **Ovoz qabul qilindi!**\n\nKanalga qaytish uchun tugmani bosing:', {
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        inline_keyboard: [[{ text: '🔙 Kanalga qaytish', url: channelUrl }]]
-                    }
-                });
-            } catch (e) { /* ignore if blocked */ }
+            if (channelUrl) {
+                // Send ephemeral hint or private message? 
+                // Since this is callback, we can't open URL and alert.
+                // We'll send a message to the user.
+                try {
+                    await bot.sendMessage(userId, '✅ **Ovoz qabul qilindi!**\n\nKanalga qaytish uchun tugmani bosing:', {
+                        parse_mode: 'Markdown',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '🔙 Kanalga qaytish', url: channelUrl }]]
+                        }
+                    });
+                } catch (e) { /* ignore if blocked */ }
+            }
         }
 
     } catch (e) {
