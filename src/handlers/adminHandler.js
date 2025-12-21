@@ -108,6 +108,7 @@ async function refreshManagementMessage(bot, chatId, msgId, pollId, isNew = fals
     if (end && now > end) status = '🔒 Yopiq';
 
     // Format Dates
+    const startStr = start ? start.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
     const endStr = end ? end.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
 
     // Escape Markdown chars in description
