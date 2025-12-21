@@ -395,6 +395,11 @@ const showConfirmation = async (bot, chatId, data) => {
     text += `- Boshlanish: ${data.start_time || 'Hozir'}\n`;
     text += `- Tugash: ${data.end_time || 'Cheksiz'}\n`;
 
+    // Truncate if too long for caption (1024 limit)
+    if (text.length > 1000) {
+        text = text.substring(0, 997) + '...';
+    }
+
     const markup = { inline_keyboard: [[{ text: '✅ Yaratish', callback_data: 'wiz_create' }], [{ text: '❌ Bekor qilish', callback_data: 'wiz_cancel' }]] };
 
     if (data.media) {
