@@ -92,26 +92,26 @@ bot.on('callback_query', async (query) => {
     } else if (data.startsWith('manage:')) {
         const pollId = data.split(':')[1];
         await refreshManagementMessage(bot, query.message.chat.id, query.message.message_id, pollId);
-        await bot.answerCallbackQuery(query.id);
+        await bot.answerCallbackQuery(query.id).catch(() => { });
     } else if (data.startsWith('plist:')) {
         // plist:type:page
         const parts = data.split(':');
         const type = parts[1];
         const page = parseInt(parts[2]);
         await sendPollList(bot, query.message.chat.id, query.from.id, type, page, query.message.message_id);
-        await bot.answerCallbackQuery(query.id);
+        await bot.answerCallbackQuery(query.id).catch(() => { });
     } else if (data.startsWith('send_poll:')) {
         const pollId = data.split(':')[1];
         await sendPoll(bot, query.message.chat.id, pollId, BOT_USERNAME);
-        await bot.answerCallbackQuery(query.id);
+        await bot.answerCallbackQuery(query.id).catch(() => { });
     } else if (data === 'search_poll_prompt') {
         // Simple prompt logic? Or redirect?
         // searchState? need to move searchState to messageHandler or a global service.
         // For now, simple text response:
         bot.sendMessage(query.message.chat.id, 'Use /search ID');
-        bot.answerCallbackQuery(query.id);
+        bot.answerCallbackQuery(query.id).catch(() => { });
     } else {
-        bot.answerCallbackQuery(query.id);
+        bot.answerCallbackQuery(query.id).catch(() => { });
     }
 });
 

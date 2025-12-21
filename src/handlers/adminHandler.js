@@ -8,25 +8,25 @@ async function handleAdminCallback(bot, query) {
     const action = parts[1];
     // Dynamic parts...
 
-    if (!isAdmin(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true });
+    if (!isAdmin(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Not Authorized', show_alert: true }).catch(() => { });
 
     try {
         /* --- POLL ACTIONS --- */
         if (action === 'start') {
             const pollId = parts[2];
             db.prepare("UPDATE polls SET start_time = datetime('now', '-1 minute'), end_time = NULL WHERE id = ?").run(pollId);
-            bot.answerCallbackQuery(query.id, { text: '🟢 Boshlandi' });
+            bot.answerCallbackQuery(query.id, { text: '🟢 Boshlandi' }).catch(() => { });
             refreshManagementMessage(bot, message.chat.id, message.message_id, pollId);
         }
         else if (action === 'stop') {
             const pollId = parts[2];
             db.prepare('UPDATE polls SET end_time = CURRENT_TIMESTAMP WHERE id = ?').run(pollId);
-            bot.answerCallbackQuery(query.id, { text: '🛑 Toxtatildi' });
+            bot.answerCallbackQuery(query.id, { text: '🛑 Toxtatildi' }).catch(() => { });
             refreshManagementMessage(bot, message.chat.id, message.message_id, pollId);
         }
         else if (action === 'results') {
             const pollId = parts[2];
-            bot.answerCallbackQuery(query.id);
+            bot.answerCallbackQuery(query.id).catch(() => { });
             // Send results as new message or alert? Original sent text.
             const resultsText = getPollResults(pollId);
             try {
@@ -39,23 +39,23 @@ async function handleAdminCallback(bot, query) {
             const pollId = parts[2];
             const buttons = [[{ text: '✅ HA, Ochirilsin', callback_data: `admin:confirm_delete:${pollId}` }, { text: '❌ Bekor qilish', callback_data: `admin:cancel_delete:${pollId}` }]];
             bot.editMessageText(`⚠️ **DIQQAT!**\n\nSorovnoma #${pollId} ni ochirmoqchimisiz?`, { chat_id: message.chat.id, message_id: message.message_id, parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
-            bot.answerCallbackQuery(query.id);
+            bot.answerCallbackQuery(query.id).catch(() => { });
         }
         else if (action === 'confirm_delete') {
             const pollId = parts[2];
             db.prepare('DELETE FROM polls WHERE id = ?').run(pollId);
-            bot.answerCallbackQuery(query.id, { text: 'Ochirildi' });
+            bot.answerCallbackQuery(query.id, { text: 'Ochirildi' }).catch(() => { });
             bot.deleteMessage(message.chat.id, message.message_id).catch(() => { });
             bot.sendMessage(message.chat.id, `🗑️ Sorovnoma #${pollId} ochirildi.`);
         }
         else if (action === 'cancel_delete') {
             const pollId = parts[2];
-            bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' });
+            bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' }).catch(() => { });
             refreshManagementMessage(bot, message.chat.id, message.message_id, pollId);
         }
     } catch (e) {
         console.error('Admin Handler Error:', e);
-        bot.answerCallbackQuery(query.id, { text: 'Xatolik' });
+        bot.answerCallbackQuery(query.id, { text: 'Xatolik' }).catch(() => { });
     }
 }
 
@@ -64,25 +64,25 @@ async function handleSuperAdminAction(bot, query) {
     const parts = data.split(':');
     const action = parts[1];
 
-    if (!isSuperAdmin(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Super Admin Only', show_alert: true });
+    if (!isSuperAdmin(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Super Admin Only', show_alert: true }).catch(() => { });
 
     if (action === 'add') {
         const { adminState } = require('./messageHandler');
         adminState.set(from.id, { step: 'waiting_for_id' });
 
         bot.sendMessage(message.chat.id, '🆔 **Yangi Super Admin qo\'shish**\n\nIltimos, foydalanuvchining ID raqamini yuboring:\n(Bekor qilish uchun /cancel)', { reply_markup: { remove_keyboard: true } });
-        bot.answerCallbackQuery(query.id);
+        bot.answerCallbackQuery(query.id).catch(() => { });
     }
     else if (action === 'remove') {
         const targetId = parts[2];
         db.prepare('DELETE FROM admins WHERE user_id = ?').run(targetId);
-        bot.answerCallbackQuery(query.id, { text: 'Ochirildi' });
+        bot.answerCallbackQuery(query.id, { text: 'Ochirildi' }).catch(() => { });
         // Refresh list?
         bot.editMessageText('Admin ochirildi. Qayta /admins bosing.', { chat_id: message.chat.id, message_id: message.message_id });
     }
     else if (action === 'info') { // admin_info
         // Show details?
-        bot.answerCallbackQuery(query.id, { text: 'Details...' });
+        bot.answerCallbackQuery(query.id, { text: 'Details...' }).catch(() => { });
     }
 }
 
@@ -139,7 +139,7 @@ async function handleBroadcastCallback(bot, query) {
     const { broadcastState } = require('./messageHandler');
 
     if (!broadcastState || !broadcastState.has(userId)) {
-        return bot.answerCallbackQuery(query.id, { text: 'Sessiya tugagan yoki topilmadi', show_alert: true });
+        return bot.answerCallbackQuery(query.id, { text: 'Sessiya tugagan yoki topilmadi', show_alert: true }).catch(() => { });
     }
 
     const state = broadcastState.get(userId);
@@ -150,13 +150,13 @@ async function handleBroadcastCallback(bot, query) {
             await bot.deleteMessage(chatId, query.message.message_id);
             await bot.sendMessage(chatId, '❌ Bekor qilindi.');
         } catch (e) { }
-        return bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' });
+        return bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' }).catch(() => { });
     }
 
     if (data === 'broadcast:confirm') {
         if (state.step !== 'confirm' || !state.content) return;
 
-        await bot.answerCallbackQuery(query.id, { text: 'Boshlanmoqda...' });
+        await bot.answerCallbackQuery(query.id, { text: 'Boshlanmoqda...' }).catch(() => { });
         await bot.editMessageText('⏳ **Yuborilmoqda...**', { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'Markdown' });
 
         const users = db.prepare('SELECT user_id FROM users').all();

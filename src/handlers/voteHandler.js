@@ -42,11 +42,11 @@ async function handleVote(bot, query, botUsername) {
         return sendPoll(bot, message.chat.id, pollId, botUsername);
     }
 
-    if (type !== 'vote') return bot.answerCallbackQuery(id); // Ignored
+    if (type !== 'vote') return bot.answerCallbackQuery(id).catch(() => { }); // Ignored
 
     // Throttle
     const throttleKey = `${userId}:${strPollId}`;
-    if (processingCache.has(throttleKey)) return bot.answerCallbackQuery(id);
+    if (processingCache.has(throttleKey)) return bot.answerCallbackQuery(id).catch(() => { });
     processingCache.add(throttleKey);
     setTimeout(() => processingCache.delete(throttleKey), throttleTime);
 
