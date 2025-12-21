@@ -98,6 +98,24 @@ async function handleVote(bot, query, botUsername) {
         // but for "instant" feel on the clicked message, the above await is key.
         updateSharedPolls(bot, pollId, botUsername).catch(err => console.error('Shared Update Error:', err.message));
 
+        // Return to Channel Logic (if voted successfully and channels required)
+        if (msg.includes('qabul qilindi') && requiredChannels.length > 0) {
+            const firstChannel = requiredChannels[0];
+            const channelUrl = firstChannel.url || `https://t.me/${firstChannel.username.replace('@', '')}`;
+
+            // Send ephemeral hint or private message? 
+            // Since this is callback, we can't open URL and alert.
+            // We'll send a message to the user.
+            try {
+                await bot.sendMessage(userId, '✅ **Ovoz qabul qilindi!**\n\nKanalga qaytish uchun tugmani bosing:', {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        inline_keyboard: [[{ text: '🔙 Kanalga qaytish', url: channelUrl }]]
+                    }
+                });
+            } catch (e) { /* ignore if blocked */ }
+        }
+
     } catch (e) {
         // Don't log expected logic errors to console, just show to user
         const knownErrors = ['Ovozni ozgartira olmaysiz.', 'Faqat bitta variant tanlash mumkin.'];

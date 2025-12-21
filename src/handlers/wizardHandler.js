@@ -278,6 +278,7 @@ const handleWizardCallback = async (bot, query) => {
     }
 
     if (data === 'wiz_skip_end') {
+        if (!session) return bot.answerCallbackQuery(query.id, { text: 'Sessiya eskirgan.' });
         sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.CONFIRM, data: { ...session.data, end_time: null } });
         showConfirmation(bot, chatId, sessionService.getWizardSession(userId).data);
         return bot.answerCallbackQuery(query.id);
