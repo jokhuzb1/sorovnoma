@@ -13,4 +13,4 @@ RUN mkdir -p data
 
 ENV NODE_ENV=production
 
-CMD [ "node", "src/index.js" ]
+CMD [ "node", "src/bot.js" ]

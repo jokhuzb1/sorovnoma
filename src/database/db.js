@@ -3,9 +3,9 @@ const path = require('path');
 const fs = require('fs');
 
 // Ensure data directory exists
-const dataDir = path.join(__dirname, '../data');
+const dataDir = path.join(__dirname, '../../data');
 if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir);
+    fs.mkdirSync(dataDir, { recursive: true });
 }
 
 const db = new Database(path.join(dataDir, 'voting.db'));
@@ -76,43 +76,19 @@ db.exec(`
         FOREIGN KEY(poll_id) REFERENCES polls(id) ON DELETE CASCADE,
         UNIQUE(chat_id, message_id)
     );
-`);
-
-// Migration for existing tables (run independently)
-const migrations = [
-    // 'ALTER TABLE polls ADD COLUMN start_time INTEGER', // Now in CREATE TABLE
-    // 'ALTER TABLE polls ADD COLUMN end_time INTEGER',
-    'ALTER TABLE polls ADD COLUMN notified INTEGER DEFAULT 0',
-    "ALTER TABLE admins ADD COLUMN role TEXT DEFAULT 'admin'",
-    'ALTER TABLE polls ADD COLUMN creator_id INTEGER',
-    'ALTER TABLE polls ADD COLUMN published INTEGER DEFAULT 0',
-    'ALTER TABLE required_channels ADD COLUMN channel_id INTEGER',
-    'ALTER TABLE required_channels ADD COLUMN channel_title TEXT',
-    `CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         first_name TEXT,
         username TEXT,
         joined_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`,
-    `CREATE TABLE IF NOT EXISTS poll_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        poll_id INTEGER,
-        chat_id INTEGER,
-        message_id INTEGER,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY(poll_id) REFERENCES polls(id) ON DELETE CASCADE,
-        UNIQUE(chat_id, message_id)
-    )`
-];
-
-migrations.forEach(query => {
-    try {
-        db.prepare(query).run();
-    } catch (e) {
-        // Prepare might fail if column exists, which is fine.
-    }
-});
-
-
+    );
+    CREATE TABLE IF NOT EXISTS drafts (
+        user_id INTEGER PRIMARY KEY,
+        media_type TEXT,
+        media_id TEXT,
+        sticker_id TEXT,
+        updated_at INTEGER
+    );
+`);
 
 module.exports = db;
