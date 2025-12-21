@@ -13,16 +13,19 @@ async function checkChannelMembership(bot, userId, requiredChannels) {
             console.log(`[channel_check] Result for ${target}: ${member.status}`);
 
             if (!['creator', 'administrator', 'member'].includes(member.status)) {
-                return { id: target, title: title, url: channel.channel_username ? `https://t.me/${channel.channel_username.replace('@', '')}` : null };
+                // Return Title Priority: Saved Title -> API Title -> Username
+                const displayTitle = channel.channel_title || title || channel.channel_username;
+                return { id: target, title: displayTitle, url: channel.channel_username ? `https://t.me/${channel.channel_username.replace('@', '')}` : null };
             }
         } catch (e) {
             console.error(`[channel_check] Error checking ${target}: ${e.message}`);
+            const displayTitle = channel.channel_title || title;
             // Check for specific Bot Permissions errors
             if (e.message.includes('bot is not a member') || e.message.includes('user not found')) {
-                return { id: target, title: title, error: `Bot ${title} kanalida admin emas!` };
+                return { id: target, title: displayTitle, error: `Bot ${displayTitle} kanalida admin emas!` };
             }
             if (e.message.includes('chat not found')) {
-                return { id: target, title: title, error: `Kanal topilmadi: ${title}` };
+                return { id: target, title: displayTitle, error: `Kanal topilmadi: ${displayTitle}` };
             }
             // General error
             return { id: target, title: title, error: `Xatolik: ${e.message}` };
@@ -48,23 +51,66 @@ function generatePollContent(pollId, botUsername) {
     const countsMap = {};
     voteCounts.forEach(row => countsMap[row.option_id] = row.count);
 
-    const settings = JSON.parse(poll.settings_json || '{}');
-    const mode = settings.multiple_choice ? 'Kop tanlov' : 'Bitta tanlov';
+    // Caption: Descripton + Bold Instruction (No Link)
+    let caption = `<b>${poll.description}</b>\n\n👇 <b>Ulashish uchun quyidagi tugmani bosing!</b>👇`;
 
-    // Simple caption without status
-    let caption = `${poll.description}`;
+    // Show vote counts in buttons (Text + Count only)
+    const inline_keyboard = options.map(opt => {
+        const count = countsMap[opt.id] || 0;
+        return [{
+            text: `${opt.text} (${count})`,
+            callback_data: `vote:${pollId}:${opt.id}`
+        }];
+    });
 
-    // Show vote counts in buttons - clean format without emojis
-    const inline_keyboard = options.map(opt => [{
-        text: `${opt.text} (${countsMap[opt.id] || 0})`,
-        callback_data: `vote:${pollId}:${opt.id}`
-    }]);
+    // Share button at the TOP (Only if Media exists)
+    if (poll.media_type && poll.media_type !== 'none') {
+        inline_keyboard.unshift([
+            { text: '⤴️ Ulashish', switch_inline_query: `poll_${pollId}` }
+        ]);
+    } else {
+        // If no share button, maybe remove the "Ulashish uchun" text?
+        // User said "make sharing not possible if they do not select the photo".
+        // So for text polls, we just don't show the share UI.
+        caption = `<b>${poll.description}</b>`;
+    }
 
-    // Add Share and Refresh buttons
-    inline_keyboard.push([
-        { text: '♻️ Ulashish', switch_inline_query: `poll_${pollId}` },
-        { text: '🔄 Yangilash', callback_data: `refresh:${pollId}` }
-    ]);
+    return { caption, reply_markup: { inline_keyboard }, poll };
+}
+
+// Helper to generate SHARABLE Poll Content (WITH BUTTONS)
+function generateSharablePollContent(pollId, botUsername) {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return null;
+
+    const options = db.prepare('SELECT * FROM options WHERE poll_id = ?').all(pollId);
+
+    // Optimized: Fetch all vote counts in ONE query
+    const totalVotes = db.prepare('SELECT COUNT(DISTINCT user_id) as count FROM votes WHERE poll_id = ?').get(pollId).count;
+    const voteCounts = db.prepare('SELECT option_id, COUNT(*) as count FROM votes WHERE poll_id = ? GROUP BY option_id').all(pollId);
+    const countsMap = {};
+    voteCounts.forEach(row => countsMap[row.option_id] = row.count);
+
+    // Caption: Descripton + Bold Instruction (No Link)
+    let caption = `<b>${poll.description}</b>\n\n👇 <b>lashish uchun quyidagi tugmani bosing!</b>👇`;
+
+    // Show vote counts in buttons (Text + Count only)
+    const inline_keyboard = options.map(opt => {
+        const count = countsMap[opt.id] || 0;
+        return [{
+            text: `${opt.text} (${count})`,
+            callback_data: `vote:${pollId}:${opt.id}`
+        }];
+    });
+
+    // Share button at the TOP (Only if Media exists)
+    if (poll.media_type && poll.media_type !== 'none') {
+        inline_keyboard.unshift([
+            { text: '⤴️ Ulashish', switch_inline_query: `poll_${pollId}` }
+        ]);
+    } else {
+        caption = `<b>${poll.description}</b>`;
+    }
 
     return { caption, reply_markup: { inline_keyboard }, poll };
 }
@@ -84,6 +130,45 @@ function generateJoinBotPoll(pollId, botUsername) {
     ];
 
     return { caption, reply_markup: { inline_keyboard }, poll };
+}
+
+async function sendPoll(bot, chatId, pollId, botUsername) {
+    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+    if (!poll) return false;
+
+    // Use button-based poll INSIDE BOT
+    const content = generatePollContent(pollId, botUsername);
+    if (!content) return false;
+
+    const { caption, reply_markup } = content;
+
+    try {
+        let sentMsg;
+        const opts = { caption, reply_markup, parse_mode: 'HTML' }; // Added parse_mode
+
+        if (poll.media_type === 'photo' && poll.media_id) {
+            sentMsg = await bot.sendPhoto(chatId, poll.media_id, opts);
+        } else if (poll.media_type === 'video' && poll.media_id) {
+            sentMsg = await bot.sendVideo(chatId, poll.media_id, opts);
+        } else {
+            sentMsg = await bot.sendMessage(chatId, caption, opts);
+        }
+
+        if (sentMsg) {
+            try {
+                // Determine if it's a channel/group/private for logging
+                const type = chatId < 0 ? 'Group/Channel' : 'Private';
+                db.prepare('INSERT OR IGNORE INTO poll_messages (poll_id, chat_id, message_id) VALUES (?, ?, ?)').run(pollId, chatId, sentMsg.message_id);
+                console.log(`[sendPoll] Tracked ${type} message: ${chatId}:${sentMsg.message_id} for Poll #${pollId}`);
+            } catch (dbErr) {
+                console.error('Failed to track poll message:', dbErr.message);
+            }
+        }
+        return true;
+    } catch (e) {
+        console.error('Error sending poll:', e.message);
+        return false;
+    }
 }
 
 const updateQueue = new Map();
@@ -230,38 +315,41 @@ async function handleVote(bot, query, botUsername) {
                     }
 
 
-                    // DYNAMIC BUTTON REPLACEMENT: Replace poll buttons with "Join Bot" button
-                    console.log(`[DEBUG] User ${userId} not verified. Replacing poll buttons...`);
+                    // FIX: REDIRECT TO BOT FOR VERIFICATION
+                    // Do NOT edit the shared message buttons, as that affects everyone.
+                    // Instead, redirect the specific user to the bot to handle verification privately.
 
+                    console.log(`[DEBUG] User ${userId} not verified. Redirecting to bot...`);
+
+                    // Save Return Link Context (Optional, for deep linking back if needed)
                     // Save Return Link Context
-                    if (message && message.chat && message.chat.username) {
-                        returnLinkMap.set(userId, `https://t.me/${message.chat.username}/${message.message_id}`);
-                    }
-
-                    // Answer callback immediately
-                    await bot.answerCallbackQuery(id, {
-                        text: '⚠️ Avval kanallarga a\'zo bo\'ling!',
-                        show_alert: true
-                    });
-
-                    // Generate "Join Bot" version of the poll
-                    const joinBotPoll = generateJoinBotPoll(pollId, botUsername);
-                    if (!joinBotPoll) {
-                        return;
-                    }
-
-                    // Replace poll buttons with verification buttons
-                    try {
-                        if (inline_message_id) {
-                            await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { inline_message_id });
-                        } else if (chatId && messageId) {
-                            await bot.editMessageReplyMarkup(joinBotPoll.reply_markup, { chat_id: chatId, message_id: messageId });
+                    if (message && message.chat) {
+                        if (message.chat.username) {
+                            // Public Chat
+                            returnLinkMap.set(userId, `https://t.me/${message.chat.username}/${message.message_id}`);
+                        } else if (message.chat.id.toString().startsWith('-100')) {
+                            // Private Supergroup (convert -100123... to 123...)
+                            const chatIdStr = message.chat.id.toString();
+                            const cleanId = chatIdStr.substring(4); // Remove -100
+                            returnLinkMap.set(userId, `https://t.me/c/${cleanId}/${message.message_id}`);
                         }
-                        console.log(`[DEBUG] Replaced poll buttons for verification`);
-                    } catch (e) {
-                        console.log(`[DEBUG] Failed to replace buttons:`, e.message);
                     }
-                    return; // Stop here - don't proceed to vote
+
+                    const startBotUrl = `https://t.me/${botUsername}?start=verify_${pollId}`;
+
+                    try {
+                        // Attempt to open the bot via URL
+                        await bot.answerCallbackQuery(id, {
+                            url: startBotUrl
+                        });
+                    } catch (e) {
+                        // Fallback
+                        await bot.answerCallbackQuery(id, {
+                            text: '⚠️ Avval kanallarga a\'zo bo\'ling! (Botni start qiling)',
+                            show_alert: true
+                        });
+                    }
+                    return; // Stop here
                 }
             }
         }
@@ -323,13 +411,18 @@ async function handleVote(bot, query, botUsername) {
         // Send Success Toast Notification (not blocking alert)
         bot.answerCallbackQuery(id, { text: `✅ ${successMessage}`, show_alert: true });
 
-        // Queue UI Update
+        // Queue UI Update (for bot messages)
         const chatId = message ? message.chat.id : null;
         const messageId = message ? message.message_id : null;
         const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
 
         if (!updateQueue.has(key)) {
             updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id, botUsername });
+        }
+
+        // Trigger shared poll updates (passed from index.js)
+        if (typeof global.updateSharedPolls === 'function') {
+            global.updateSharedPolls(pollId);
         }
 
     } catch (error) {
@@ -351,15 +444,15 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
             await bot.editMessageCaption(caption, { chat_id: chatId, message_id: messageId, reply_markup, parse_mode: 'HTML' });
         }
     } catch (e) {
-        // Fallback for text messages
+        // Fallback for text messages or when caption edit fails
         if (e.message.includes('there is no caption') || e.message.includes('message is not modified')) {
             if (e.message.includes('message is not modified')) return;
 
             try {
                 if (inlineMessageId) {
-                    await bot.editMessageText(caption, { inline_message_id: inlineMessageId, reply_markup });
+                    await bot.editMessageText(caption, { inline_message_id: inlineMessageId, reply_markup, parse_mode: 'HTML' });
                 } else if (chatId && messageId) {
-                    await bot.editMessageText(caption, { chat_id: chatId, message_id: messageId, reply_markup });
+                    await bot.editMessageText(caption, { chat_id: chatId, message_id: messageId, reply_markup, parse_mode: 'HTML' });
                 }
             } catch (innerError) { /* ignore */ }
         }
@@ -370,21 +463,35 @@ async function sendPoll(bot, chatId, pollId, botUsername) {
     const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
     if (!poll) return false;
 
+    // Use button-based poll INSIDE BOT
     const content = generatePollContent(pollId, botUsername);
     if (!content) return false;
 
     const { caption, reply_markup } = content;
 
-
-
     try {
-        // Then send media/poll
-        if (poll.media_type === 'photo') {
-            await bot.sendPhoto(chatId, poll.media_id, { caption, reply_markup });
-        } else if (poll.media_type === 'video') {
-            await bot.sendVideo(chatId, poll.media_id, { caption, reply_markup });
+        let sentMsg;
+        const opts = { caption, reply_markup, parse_mode: 'HTML' };
+
+        if (poll.media_type === 'photo' && poll.media_id) {
+            sentMsg = await bot.sendPhoto(chatId, poll.media_id, opts);
+        } else if (poll.media_type === 'video' && poll.media_id) {
+            sentMsg = await bot.sendVideo(chatId, poll.media_id, opts);
         } else {
-            await bot.sendMessage(chatId, caption, { reply_markup });
+            // For sendMessage, third arg is options. 'caption' is not valid for sendMessage, text is first arg.
+            // But we must pass parse_mode in options.
+            sentMsg = await bot.sendMessage(chatId, caption, { reply_markup, parse_mode: 'HTML' });
+        }
+
+        if (sentMsg) {
+            try {
+                // Determine if it's a channel/group/private for logging
+                const type = chatId < 0 ? 'Group/Channel' : 'Private';
+                db.prepare('INSERT OR IGNORE INTO poll_messages (poll_id, chat_id, message_id) VALUES (?, ?, ?)').run(pollId, chatId, sentMsg.message_id);
+                console.log(`[sendPoll] Tracked ${type} message: ${chatId}:${sentMsg.message_id} for Poll #${pollId}`);
+            } catch (dbErr) {
+                console.error('Failed to track poll message:', dbErr.message);
+            }
         }
         return true;
     } catch (e) {
@@ -395,4 +502,4 @@ async function sendPoll(bot, chatId, pollId, botUsername) {
 
 const returnLinkMap = new Map();
 
-module.exports = { handleVote, updatePollMessage, sendPoll, generatePollContent, checkChannelMembership, returnLinkMap, getPollResults };
+module.exports = { handleVote, updatePollMessage, sendPoll, generatePollContent, generateSharablePollContent, checkChannelMembership, returnLinkMap, getPollResults };

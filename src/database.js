@@ -59,6 +59,23 @@ db.exec(`
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         role TEXT DEFAULT 'admin'
     );
+
+    CREATE TABLE IF NOT EXISTS shared_polls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poll_id INTEGER,
+        inline_message_id TEXT UNIQUE,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(poll_id) REFERENCES polls(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS poll_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poll_id INTEGER,
+        chat_id INTEGER,
+        message_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(poll_id) REFERENCES polls(id) ON DELETE CASCADE,
+        UNIQUE(chat_id, message_id)
+    );
 `);
 
 // Migration for existing tables (run independently)
@@ -76,6 +93,15 @@ const migrations = [
         first_name TEXT,
         username TEXT,
         joined_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS poll_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poll_id INTEGER,
+        chat_id INTEGER,
+        message_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(poll_id) REFERENCES polls(id) ON DELETE CASCADE,
+        UNIQUE(chat_id, message_id)
     )`
 ];
 
