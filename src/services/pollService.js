@@ -15,8 +15,8 @@ function generatePollContent(pollId, botUsername) {
     const inline_keyboard = options.map(opt => {
         const count = countsMap[opt.id] || 0;
         let text = opt.text;
-        if (text.length > 30) {
-            text = text.substring(0, 27) + '...';
+        if (text.length > 50) {
+            text = text.substring(0, 47) + '...';
         }
         return [{
             text: `${text} (${count})`,
