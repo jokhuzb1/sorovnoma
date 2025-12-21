@@ -87,7 +87,11 @@ async function handleVote(bot, query, botUsername) {
         await updateSharedPolls(bot, pollId, botUsername);
 
     } catch (e) {
-        console.error('Vote Error:', e);
+        // Don't log expected logic errors to console, just show to user
+        const knownErrors = ['Ovozni ozgartira olmaysiz.', 'Faqat bitta variant tanlash mumkin.'];
+        if (!knownErrors.includes(e.message)) {
+            console.error('Vote Error:', e);
+        }
         bot.answerCallbackQuery(id, { text: e.message, show_alert: true });
     }
 }
