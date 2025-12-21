@@ -118,8 +118,10 @@ async function handleMessage(bot, msg) {
                             const buttons = [];
 
                             missing.forEach(ch => {
-                                text += `• ${ch.title}\n`;
-                                if (ch.url) buttons.push([{ text: `➕ A'zo bo'lish (${ch.title})`, url: ch.url }]);
+                                // Escape special characters for Markdown: _, *, [, ], `, etc.
+                                const cleanTitle = ch.title.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+                                text += `• ${cleanTitle}\n`;
+                                if (ch.url) buttons.push([{ text: `➕ A'zo bo'lish (${cleanTitle})`, url: ch.url }]);
                             });
 
                             buttons.push([{ text: '✅ Tekshirish', callback_data: `check_sub:${pollId}` }]);
