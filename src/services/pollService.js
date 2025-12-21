@@ -15,8 +15,8 @@ function generatePollContent(pollId, botUsername) {
     const inline_keyboard = options.map(opt => {
         const count = countsMap[opt.id] || 0;
         let text = opt.text;
-        if (text.length > 50) {
-            text = text.substring(0, 47) + '...';
+        if (text.length > 40) {
+            text = text.substring(0, 37) + '...';
         }
         return [{
             text: `${text} (${count})`,
@@ -52,10 +52,21 @@ function getPollResults(pollId) {
     let text = `📊 **Sorovnoma Natijalari** (#${pollId})\n\n`;
     text += `📝 ${poll.description}\n\n`;
 
+    // Calculate max votes for leader(s)
+    let maxVotes = 0;
+    options.forEach(opt => {
+        const c = countsMap[opt.id] || 0;
+        if (c > maxVotes) maxVotes = c;
+    });
+
     options.forEach(opt => {
         const count = countsMap[opt.id] || 0;
         const percent = totalVotes > 0 ? ((count / totalVotes) * 100).toFixed(1) : 0;
-        text += `▫️ ${opt.text}: **${count}** ovoz (${percent}%)\n`;
+
+        let marker = '▫️';
+        if (maxVotes > 0 && count === maxVotes) marker = '🏆';
+
+        text += `${marker} ${opt.text}: <b>${count}</b> ovoz (${percent}%)\n`;
     });
 
     text += `\n👥 Jami ovozlar: ${totalVotes}`;
