@@ -132,44 +132,8 @@ function generateJoinBotPoll(pollId, botUsername) {
     return { caption, reply_markup: { inline_keyboard }, poll };
 }
 
-async function sendPoll(bot, chatId, pollId, botUsername) {
-    const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
-    if (!poll) return false;
+// Duplicate sendPoll removed
 
-    // Use button-based poll INSIDE BOT
-    const content = generatePollContent(pollId, botUsername);
-    if (!content) return false;
-
-    const { caption, reply_markup } = content;
-
-    try {
-        let sentMsg;
-        const opts = { caption, reply_markup, parse_mode: 'HTML' }; // Added parse_mode
-
-        if (poll.media_type === 'photo' && poll.media_id) {
-            sentMsg = await bot.sendPhoto(chatId, poll.media_id, opts);
-        } else if (poll.media_type === 'video' && poll.media_id) {
-            sentMsg = await bot.sendVideo(chatId, poll.media_id, opts);
-        } else {
-            sentMsg = await bot.sendMessage(chatId, caption, opts);
-        }
-
-        if (sentMsg) {
-            try {
-                // Determine if it's a channel/group/private for logging
-                const type = chatId < 0 ? 'Group/Channel' : 'Private';
-                db.prepare('INSERT OR IGNORE INTO poll_messages (poll_id, chat_id, message_id) VALUES (?, ?, ?)').run(pollId, chatId, sentMsg.message_id);
-                console.log(`[sendPoll] Tracked ${type} message: ${chatId}:${sentMsg.message_id} for Poll #${pollId}`);
-            } catch (dbErr) {
-                console.error('Failed to track poll message:', dbErr.message);
-            }
-        }
-        return true;
-    } catch (e) {
-        console.error('Error sending poll:', e.message);
-        return false;
-    }
-}
 
 const updateQueue = new Map();
 
@@ -426,7 +390,7 @@ async function handleVote(bot, query, botUsername) {
         }
 
     } catch (error) {
-        console.error('Vote Error:', error);
+        console.error('Vote Error:', error.message);
         try { bot.answerCallbackQuery(id, { text: 'Xatolik yuz berdi' }); } catch (e) { }
     }
 }
