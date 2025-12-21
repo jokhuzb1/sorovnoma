@@ -3,7 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const db = require('./database/db');
 const { handleMessage, sendPollList } = require('./handlers/messageHandler');
 const { handleVote } = require('./handlers/voteHandler');
-const { handleAdminCallback, handleSuperAdminAction, refreshManagementMessage } = require('./handlers/adminHandler');
+const { handleAdminCallback, handleSuperAdminAction, refreshManagementMessage, handleBroadcastCallback } = require('./handlers/adminHandler');
 const { handleWizardCallback } = require('./handlers/wizardHandler');
 const { MESSAGES } = require('./config/constants');
 const { generateSharablePollContent, sendPoll } = require('./services/pollService');
@@ -57,6 +57,8 @@ bot.on('callback_query', async (query) => {
         handleVote(bot, query, BOT_USERNAME);
     } else if (data.startsWith('admin:')) {
         handleAdminCallback(bot, query);
+    } else if (data.startsWith('broadcast:')) {
+        handleBroadcastCallback(bot, query);
     } else if (data.startsWith('super:')) {
         // Needs extraction
         if (data.startsWith('super:remove')) {

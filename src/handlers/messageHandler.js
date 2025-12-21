@@ -13,8 +13,57 @@ async function handleMessage(bot, msg) {
     const userId = msg.from.id;
     const text = msg.text;
 
+    // 0. Save User
+    saveUser(msg.from);
+
     // 1. Wizard Check
     if (await handleWizardStep(bot, msg)) return;
+
+    if (broadcastState.has(userId)) {
+        const state = broadcastState.get(userId);
+        if (text === '/cancel') {
+            broadcastState.delete(userId);
+            return bot.sendMessage(chatId, '❌ Bekor qilindi.', { reply_markup: getMainMenu(userId) });
+        }
+
+        if (state.step === 'ask_message') {
+            // Capture Content
+            const content = {};
+            if (msg.photo) {
+                content.type = 'photo';
+                content.file_id = msg.photo[msg.photo.length - 1].file_id;
+                content.caption = msg.caption;
+            } else if (msg.video) {
+                content.type = 'video';
+                content.file_id = msg.video.file_id;
+                content.caption = msg.caption;
+            } else if (msg.text) {
+                content.type = 'text';
+                content.text = msg.text;
+            } else {
+                return bot.sendMessage(chatId, '⚠️ Faqat matn, rasm yoki video yuboring.');
+            }
+
+            broadcastState.set(userId, { step: 'confirm', content });
+
+            // Show Confirmation
+            const buttons = [[
+                { text: '✅ Tasdiqlash', callback_data: 'broadcast:confirm' },
+                { text: '❌ Bekor qilish', callback_data: 'broadcast:cancel' }
+            ]];
+
+            if (content.type === 'text') {
+                return bot.sendMessage(chatId, `📢 **Xabar matni:**\n${content.text}\n\nXabarni barcha foydalanuvchilarga yuborasizmi?`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+            } else {
+                const method = content.type === 'photo' ? 'sendPhoto' : 'sendVideo';
+                return bot[method](chatId, content.file_id, {
+                    caption: `📢 **Xabar matni:**\n${content.caption || ''}\n\nXabarni barcha foydalanuvchilarga yuborasizmi?`,
+                    parse_mode: 'Markdown',
+                    reply_markup: { inline_keyboard: buttons }
+                });
+            }
+        }
+    }
 
     if (!text) return;
 
@@ -24,7 +73,7 @@ async function handleMessage(bot, msg) {
         return startWizard(bot, userId, chatId);
     }
 
-    if (text === MESSAGES.ACTIVE_POLLS || text === '⚙️ Boshqarish') { // Legacy support
+    if (text === MESSAGES.ACTIVE_POLLS || text === '⚙️ Boshqarish') {
         if (!isAdmin(userId)) return;
         return sendPollList(bot, chatId, userId, 'active', 0);
     }
@@ -35,14 +84,29 @@ async function handleMessage(bot, msg) {
     }
 
     if (text === MESSAGES.HELP) {
-        return bot.sendMessage(chatId, '📖 **Yordam**\n\nAdminlar uchun bot...', { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
+        const isSuper = isSuperAdmin(userId);
+        let helpText = `📖 **Adminlar uchun Qo'llanma**\n\n`;
+        helpText += `➕ **Yangi So'rovnoma**: Yangi ovoz berish jarayonini yaratish.\n`;
+        helpText += `⚙️ **Aktiv So'rovnomalar**: Hozir ishlayotgan so'rovnomalarni boshqarish (To'xtatish, O'chirish).\n`;
+        helpText += `📋 **Barchasi**: Barcha eski va yangi so'rovnomalar ro'yxati.\n`;
+        helpText += `📊 **Statistika**: Bot foydalanuvchilari va ovozlar soni.\n`;
+
+        if (isSuper) {
+            helpText += `\n👤 **Adminlar**: Adminlarni boshqarish (faqat Super Admin).\n`;
+            helpText += `📢 **Yangilik Yuborish**: Barcha foydalanuvchilarga xabar tarqatish.\n`;
+        }
+
+        helpText += `\n❓ Savollar bo'lsa @admin ga yozing.`;
+
+        return bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
     }
 
     if (text === MESSAGES.STATISTICS) {
         if (!isAdmin(userId)) return;
         const count = db.prepare('SELECT COUNT(*) as c FROM polls').get().c;
         const votes = db.prepare('SELECT COUNT(*) as c FROM votes').get().c;
-        return bot.sendMessage(chatId, `📊 **Statistika**\n\nPolls: ${count}\nVotes: ${votes}`, { reply_markup: getMainMenu(userId) });
+        const users = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
+        return bot.sendMessage(chatId, `📊 **Statistika**\n\n🗳 Sorovnomalar: ${count}\n👥 Foydalanuvchilar: ${users}\n✅ Ovozlar: ${votes}`, { reply_markup: getMainMenu(userId) });
     }
 
     if (text === MESSAGES.ADMINS) {
@@ -57,28 +121,26 @@ async function handleMessage(bot, msg) {
     if (text === MESSAGES.SEND_NEWS) {
         if (!isSuperAdmin(userId)) return;
         broadcastState.set(userId, { step: 'ask_message' });
-        return bot.sendMessage(chatId, '📢 Send message content or /cancel');
+        return bot.sendMessage(chatId, '📢 **Yangilik Yuborish**\n\nXabarni matn, rasm yoki video ko\'rinishida yuboring.\nBekor qilish uchun /cancel ni bosing.', { reply_markup: { remove_keyboard: true } }); // Hide menu temporarily? Or keep it. keeping for cancel logic.
     }
 
-    if (broadcastState.has(userId)) {
-        const state = broadcastState.get(userId);
-        if (text === '/cancel') {
-            broadcastState.delete(userId);
-            return bot.sendMessage(chatId, 'Cancelled.', { reply_markup: getMainMenu(userId) });
-        }
-        if (state.step === 'ask_message') {
-            // Store and Ask Confirm
-            // Simplifying for refactoring: just echo "Not fully implemented in this refactor step, but structure is here"
-            // Or copy full logic. I'll copy basic confirm.
-            return bot.sendMessage(chatId, 'Confirm broadcast? (This is a simplified refactor currently)', { reply_markup: getMainMenu(userId) });
-        }
-    }
+    // ... Broadcast confirm handled above ...
 
     // Default: Show Menu if Admin
     if (isAdmin(userId)) {
         bot.sendMessage(chatId, 'Menu:', { reply_markup: getMainMenu(userId) });
     }
 }
+
+function saveUser(user) {
+    if (!user || user.is_bot) return;
+    try {
+        db.prepare('INSERT OR IGNORE INTO users (user_id, first_name, username) VALUES (?, ?, ?)').run(user.id, user.first_name, user.username);
+    } catch (e) { }
+}
+
+module.exports = { handleMessage, sendPollList, broadcastState };
+
 
 // Helper: Poll List (Interactive & Paginated)
 async function sendPollList(bot, chatId, userId, type = 'active', page = 0, msgId = null) {
@@ -182,4 +244,4 @@ function getMainMenu(userId) {
     return { keyboard: [[MESSAGES.HELP]], resize_keyboard: true };
 }
 
-module.exports = { handleMessage, sendPollList };
+module.exports = { handleMessage, sendPollList, broadcastState };

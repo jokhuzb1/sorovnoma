@@ -127,4 +127,64 @@ async function refreshManagementMessage(bot, chatId, msgId, pollId, isNew = fals
     } catch (e) { }
 }
 
-module.exports = { handleAdminCallback, handleSuperAdminAction, refreshManagementMessage };
+async function handleBroadcastCallback(bot, query) {
+    const userId = query.from.id;
+    const data = query.data;
+    const chatId = query.message.chat.id;
+
+    // Require here to ensure it's loaded and avoid circular dep issues at top level if any
+    const { broadcastState } = require('./messageHandler');
+
+    if (!broadcastState || !broadcastState.has(userId)) {
+        return bot.answerCallbackQuery(query.id, { text: 'Sessiya tugagan yoki topilmadi', show_alert: true });
+    }
+
+    const state = broadcastState.get(userId);
+
+    if (data === 'broadcast:cancel') {
+        broadcastState.delete(userId);
+        try {
+            await bot.deleteMessage(chatId, query.message.message_id);
+            await bot.sendMessage(chatId, '❌ Bekor qilindi.');
+        } catch (e) { }
+        return bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' });
+    }
+
+    if (data === 'broadcast:confirm') {
+        if (state.step !== 'confirm' || !state.content) return;
+
+        await bot.answerCallbackQuery(query.id, { text: 'Boshlanmoqda...' });
+        await bot.editMessageText('⏳ **Yuborilmoqda...**', { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'Markdown' });
+
+        const users = db.prepare('SELECT user_id FROM users').all();
+        let sent = 0, blocked = 0, errors = 0;
+
+        // Run in background / async loop
+        (async () => {
+            for (const user of users) {
+                try {
+                    if (state.content.type === 'text') {
+                        await bot.sendMessage(user.user_id, state.content.text);
+                    } else if (state.content.type === 'photo') {
+                        await bot.sendPhoto(user.user_id, state.content.file_id, { caption: state.content.caption });
+                    } else if (state.content.type === 'video') {
+                        await bot.sendVideo(user.user_id, state.content.file_id, { caption: state.content.caption });
+                    }
+                    sent++;
+                } catch (e) {
+                    if (e.message.includes('blocked') || e.message.includes('initiate')) blocked++;
+                    else errors++;
+                }
+                // Simple delay
+                await new Promise(r => setTimeout(r, 50));
+            }
+
+            broadcastState.delete(userId);
+            try {
+                await bot.sendMessage(chatId, `✅ **Tugatildi**\n\n👥 Jami: ${users.length}\n✅ Yuborildi: ${sent}\n🚫 Bloklagan: ${blocked}\n⚠️ Xatolar: ${errors}`);
+            } catch (e) { }
+        })();
+    }
+}
+
+module.exports = { handleAdminCallback, handleSuperAdminAction, refreshManagementMessage, handleBroadcastCallback };
