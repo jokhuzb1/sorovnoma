@@ -111,7 +111,7 @@ async function handleVote(bot, query, botUsername) {
                 // Since this is callback, we can't open URL and alert.
                 // We'll send a message to the user.
                 try {
-                    await bot.sendMessage(userId, '✅ **Ovoz qabul qilindi!**\n\nKanalga qaytish uchun tugmani bosing:', {
+                    await bot.sendMessage(userId, '✅ *Ovoz qabul qilindi!*\n\nKanalga qaytish uchun tugmani bosing:', {
                         parse_mode: 'Markdown',
                         reply_markup: {
                             inline_keyboard: [[{ text: '🔙 Kanalga qaytish', url: channelUrl }]]

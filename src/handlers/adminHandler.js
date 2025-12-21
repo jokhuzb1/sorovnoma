@@ -38,7 +38,7 @@ async function handleAdminCallback(bot, query) {
         else if (action === 'delete') {
             const pollId = parts[2];
             const buttons = [[{ text: '✅ HA, Ochirilsin', callback_data: `admin:confirm_delete:${pollId}` }, { text: '❌ Bekor qilish', callback_data: `admin:cancel_delete:${pollId}` }]];
-            bot.editMessageText(`⚠️ **DIQQAT!**\n\nSorovnoma #${pollId} ni ochirmoqchimisiz?`, { chat_id: message.chat.id, message_id: message.message_id, parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+            bot.editMessageText(`⚠️ *DIQQAT!*\n\nSorovnoma #${pollId} ni ochirmoqchimisiz?`, { chat_id: message.chat.id, message_id: message.message_id, parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
             bot.answerCallbackQuery(query.id).catch(() => { });
         }
         else if (action === 'confirm_delete') {
@@ -70,7 +70,7 @@ async function handleSuperAdminAction(bot, query) {
         const { adminState } = require('./messageHandler');
         adminState.set(from.id, { step: 'waiting_for_id' });
 
-        bot.sendMessage(message.chat.id, '🆔 **Yangi Super Admin qo\'shish**\n\nIltimos, foydalanuvchining ID raqamini yuboring:\n(Bekor qilish uchun /cancel)', { reply_markup: { remove_keyboard: true } });
+        bot.sendMessage(message.chat.id, '🆔 *Yangi Super Admin qo\'shish*\n\nIltimos, foydalanuvchining ID raqamini yuboring:\n(Bekor qilish uchun /cancel)', { reply_markup: { remove_keyboard: true } });
         bot.answerCallbackQuery(query.id).catch(() => { });
     }
     else if (action === 'remove') {
@@ -108,10 +108,12 @@ async function refreshManagementMessage(bot, chatId, msgId, pollId, isNew = fals
     if (end && now > end) status = '🔒 Yopiq';
 
     // Format Dates
-    const startStr = start ? start.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
     const endStr = end ? end.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
 
-    const text = `🆔 **Poll #${pollId}**\n\n📝 ${poll.description}\n\n📊 Status: ${status}\n🕑 Boshlanish: ${startStr}\n🏁 Tugash: ${endStr}\n\nQanday amal bajarasiz?`;
+    // Escape Markdown chars in description
+    const safeDesc = poll.description.replace(/[_*`[]/g, '\\$&');
+
+    const text = `🆔 *Poll #${pollId}*\n\n📝 ${safeDesc}\n\n📊 Status: ${status}\n🕑 Boshlanish: ${startStr}\n🏁 Tugash: ${endStr}\n\nQanday amal bajarasiz?`;
 
     try {
         if (isNew || !msgId) {
@@ -157,7 +159,7 @@ async function handleBroadcastCallback(bot, query) {
         if (state.step !== 'confirm' || !state.content) return;
 
         await bot.answerCallbackQuery(query.id, { text: 'Boshlanmoqda...' }).catch(() => { });
-        await bot.editMessageText('⏳ **Yuborilmoqda...**', { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'Markdown' });
+        await bot.editMessageText('⏳ *Yuborilmoqda...*', { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'Markdown' });
 
         const users = db.prepare('SELECT user_id FROM users').all();
         let sent = 0, blocked = 0, errors = 0;
@@ -184,7 +186,7 @@ async function handleBroadcastCallback(bot, query) {
 
             broadcastState.delete(userId);
             try {
-                await bot.sendMessage(chatId, `✅ **Tugatildi**\n\n👥 Jami: ${users.length}\n✅ Yuborildi: ${sent}\n🚫 Bloklagan: ${blocked}\n⚠️ Xatolar: ${errors}`);
+                await bot.sendMessage(chatId, `✅ *Tugatildi*\n\n👥 Jami: ${users.length}\n✅ Yuborildi: ${sent}\n🚫 Bloklagan: ${blocked}\n⚠️ Xatolar: ${errors}`);
             } catch (e) { }
         })();
     }

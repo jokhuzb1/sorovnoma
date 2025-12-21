@@ -38,7 +38,7 @@ async function handleMessage(bot, msg) {
             try {
                 // Always create as SUPER ADMIN as requested
                 db.prepare('INSERT OR REPLACE INTO admins (user_id, role) VALUES (?, ?)').run(targetId, 'super_admin');
-                bot.sendMessage(chatId, `✅ **Muvaffaqiyatli!**\n\nFoydalanuvchi (${targetId}) **Super Admin** etib tayinlandi.`);
+                bot.sendMessage(chatId, `✅ *Muvaffaqiyatli!*\n\nFoydalanuvchi (${targetId}) *Super Admin* etib tayinlandi.`);
             } catch (e) {
                 bot.sendMessage(chatId, '❌ Xatolik: ' + e.message);
             }
@@ -81,11 +81,11 @@ async function handleMessage(bot, msg) {
             ]];
 
             if (content.type === 'text') {
-                return bot.sendMessage(chatId, `📢 **Xabar matni:**\n${content.text}\n\nXabarni barcha foydalanuvchilarga yuborasizmi?`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+                return bot.sendMessage(chatId, `📢 *Xabar matni:*\n${content.text}\n\nXabarni barcha foydalanuvchilarga yuborasizmi?`, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
             } else {
                 const method = content.type === 'photo' ? 'sendPhoto' : 'sendVideo';
                 return bot[method](chatId, content.file_id, {
-                    caption: `📢 **Xabar matni:**\n${content.caption || ''}\n\nXabarni barcha foydalanuvchilarga yuborasizmi?`,
+                    caption: `📢 *Xabar matni:*\n${content.caption || ''}\n\nXabarni barcha foydalanuvchilarga yuborasizmi?`,
                     parse_mode: 'Markdown',
                     reply_markup: { inline_keyboard: buttons }
                 });
@@ -114,12 +114,12 @@ async function handleMessage(bot, msg) {
                     if (requiredChannels.length > 0) {
                         const missing = await checkChannelMembership(bot, userId, requiredChannels);
                         if (missing.length > 0) {
-                            let text = `⚠️ **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**\n\n`;
+                            let text = `⚠️ *Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:*\n\n`;
                             const buttons = [];
 
                             missing.forEach(ch => {
-                                // Escape special characters for Markdown: _, *, [, ], `, etc.
-                                const cleanTitle = ch.title.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+                                // Escape special characters for Legacy Markdown: _, *, `, [
+                                const cleanTitle = ch.title.replace(/[_*`[]/g, '\\$&');
                                 text += `• ${cleanTitle}\n`;
                                 if (ch.url) buttons.push([{ text: `➕ A'zo bo'lish (${cleanTitle})`, url: ch.url }]);
                             });
@@ -140,7 +140,7 @@ async function handleMessage(bot, msg) {
         }
 
         // Default Welcome
-        const welcomeText = `👋 **Assalomu alaykum!**\n\nSiz ushbu bot orqali so'rovnomalarda qatnashishingiz mumkin.\nAdminlar yangiliklari va so'rovnomalarini kuting.`;
+        const welcomeText = `👋 *Assalomu alaykum!*\n\nSiz ushbu bot orqali so'rovnomalarda qatnashishingiz mumkin.\nAdminlar yangiliklari va so'rovnomalarini kuting.`;
         if (isAdmin(userId)) {
             return bot.sendMessage(chatId, welcomeText, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
         } else {
@@ -166,15 +166,15 @@ async function handleMessage(bot, msg) {
 
     if (text === MESSAGES.HELP) {
         const isSuper = isSuperAdmin(userId);
-        let helpText = `📖 **Adminlar uchun Qo'llanma**\n\n`;
-        helpText += `➕ **Yangi So'rovnoma**: Yangi ovoz berish jarayonini yaratish.\n`;
-        helpText += `⚙️ **Aktiv So'rovnomalar**: Hozir ishlayotgan so'rovnomalarni boshqarish (To'xtatish, O'chirish).\n`;
-        helpText += `📋 **Barchasi**: Barcha eski va yangi so'rovnomalar ro'yxati.\n`;
-        helpText += `📊 **Statistika**: Bot foydalanuvchilari va ovozlar soni.\n`;
+        let helpText = `📖 *Adminlar uchun Qo'llanma*\n\n`;
+        helpText += `➕ *Yangi So'rovnoma*: Yangi ovoz berish jarayonini yaratish.\n`;
+        helpText += `⚙️ *Aktiv So'rovnomalar*: Hozir ishlayotgan so'rovnomalarni boshqarish (To'xtatish, O'chirish).\n`;
+        helpText += `📋 *Barchasi*: Barcha eski va yangi so'rovnomalar ro'yxati.\n`;
+        helpText += `📊 *Statistika*: Bot foydalanuvchilari va ovozlar soni.\n`;
 
         if (isSuper) {
-            helpText += `\n👤 **Adminlar**: Adminlarni boshqarish (faqat Super Admin).\n`;
-            helpText += `📢 **Yangilik Yuborish**: Barcha foydalanuvchilarga xabar tarqatish.\n`;
+            helpText += `\n👤 *Adminlar*: Adminlarni boshqarish (faqat Super Admin).\n`;
+            helpText += `📢 *Yangilik Yuborish*: Barcha foydalanuvchilarga xabar tarqatish.\n`;
         }
 
         helpText += `\n❓ Savollar bo'lsa @admin ga yozing.`;
@@ -187,7 +187,7 @@ async function handleMessage(bot, msg) {
         const count = db.prepare('SELECT COUNT(*) as c FROM polls').get().c;
         const votes = db.prepare('SELECT COUNT(*) as c FROM votes').get().c;
         const users = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
-        return bot.sendMessage(chatId, `📊 **Statistika**\n\n🗳 Sorovnomalar: ${count}\n👥 Foydalanuvchilar: ${users}\n✅ Ovozlar: ${votes}`, { reply_markup: getMainMenu(userId) });
+        return bot.sendMessage(chatId, `📊 *Statistika*\n\n🗳 Sorovnomalar: ${count}\n👥 Foydalanuvchilar: ${users}\n✅ Ovozlar: ${votes}`, { reply_markup: getMainMenu(userId) });
     }
 
     if (text === MESSAGES.ADMINS) {
@@ -202,7 +202,7 @@ async function handleMessage(bot, msg) {
     if (text === MESSAGES.SEND_NEWS) {
         if (!isSuperAdmin(userId)) return;
         broadcastState.set(userId, { step: 'ask_message' });
-        return bot.sendMessage(chatId, '📢 **Yangilik Yuborish**\n\nXabarni matn, rasm yoki video ko\'rinishida yuboring.\nBekor qilish uchun /cancel ni bosing.', { reply_markup: { remove_keyboard: true } }); // Hide menu temporarily? Or keep it. keeping for cancel logic.
+        return bot.sendMessage(chatId, '📢 *Yangilik Yuborish*\n\nXabarni matn, rasm yoki video ko\'rinishida yuboring.\nBekor qilish uchun /cancel ni bosing.', { reply_markup: { remove_keyboard: true } }); // Hide menu temporarily? Or keep it. keeping for cancel logic.
     }
 
     // ... Broadcast confirm handled above ...
@@ -287,7 +287,7 @@ async function sendPollList(bot, chatId, userId, type = 'active', page = 0, msgI
         { text: '🔄 Yangilash', callback_data: `plist:${type}:${page}` }
     ]);
 
-    const title = type === 'active' ? '🟢 **Aktiv Sorovnomalar**' : '📋 **Barcha Sorovnomalar**';
+    const title = type === 'active' ? '🟢 *Aktiv Sorovnomalar*' : '📋 *Barcha Sorovnomalar*';
     const text = `${title}\n\nJami: ${totalCount} ta\nBoshqarish uchun tanlang:`;
 
     if (msgId) {

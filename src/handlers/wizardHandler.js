@@ -35,7 +35,7 @@ const startWizard = async (bot, userId, chatId) => {
         }
     });
 
-    bot.sendMessage(chatId, '📸 **Media yuklash**\n\nSorovnoma uchun rasm yoki video yuboring.\n\nYoki "O\'tkazib yuborish" tugmasini bosing.', {
+    bot.sendMessage(chatId, '📸 *Media yuklash*\n\nSorovnoma uchun rasm yoki video yuboring.\n\nYoki "O\'tkazib yuborish" tugmasini bosing.', {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
@@ -73,12 +73,12 @@ const handleWizardStep = async (bot, msg) => {
         if (msg.photo) {
             const photoId = msg.photo[msg.photo.length - 1].file_id;
             sessionService.updateWizardSession(userId, { data: { ...session.data, media: { type: 'photo', id: photoId } }, step: WIZARD_STEPS.QUESTION });
-            bot.sendMessage(chatId, '📝 **Savolni kiriting:**\n\nMasalan: "Qaysi rangni yoqtirasiz?"');
+            bot.sendMessage(chatId, '📝 *Savolni kiriting:*\n\nMasalan: "Qaysi rangni yoqtirasiz?"');
             return true;
         } else if (msg.video) {
             const videoId = msg.video.file_id;
             sessionService.updateWizardSession(userId, { data: { ...session.data, media: { type: 'video', id: videoId } }, step: WIZARD_STEPS.QUESTION });
-            bot.sendMessage(chatId, '📝 **Savolni kiriting:**\n\nMasalan: "Qaysi rangni yoqtirasiz?"');
+            bot.sendMessage(chatId, '📝 *Savolni kiriting:*\n\nMasalan: "Qaysi rangni yoqtirasiz?"');
             return true;
         } else if (text) {
             bot.sendMessage(chatId, '⚠️ Iltimos, rasm/video yuboring yoki tugmani bosing.');
@@ -90,7 +90,7 @@ const handleWizardStep = async (bot, msg) => {
     if (step === WIZARD_STEPS.QUESTION) {
         if (!text) return true;
         sessionService.updateWizardSession(userId, { data: { ...session.data, question: text }, step: WIZARD_STEPS.OPTIONS });
-        bot.sendMessage(chatId, '📋 **Variantlarni kiriting**\n\nBirinchi variantni yuboring:', { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, '📋 *Variantlarni kiriting*\n\nBirinchi variantni yuboring:', { parse_mode: 'Markdown' });
         return true;
     }
 
@@ -106,7 +106,7 @@ const handleWizardStep = async (bot, msg) => {
         const keyboard = [];
         if (count >= 2) keyboard.push([{ text: '✅ Tayyor', callback_data: 'wiz_options_done' }]);
 
-        bot.sendMessage(chatId, `✅ **Variant qoshildi!**\n\n${optsText}\n\nKeyingi variantni yuboring ${count >= 2 ? 'yoki "Tayyor" ni bosing.' : '.'}`, {
+        bot.sendMessage(chatId, `✅ *Variant qoshildi!*\n\n${optsText}\n\nKeyingi variantni yuboring ${count >= 2 ? 'yoki "Tayyor" ni bosing.' : '.'}`, {
             parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboard }
         });
@@ -142,9 +142,11 @@ const handleWizardStep = async (bot, msg) => {
                 const newChannels = [...new Set([...currentChannels, ...validChannels])]; // Unique
                 sessionService.updateWizardSession(userId, { data: { ...session.data, channels: newChannels } });
 
-                let msg = `✅ **Muvaffaqiyatli qo'shildi:**\n${validChannels.join('\n')}\n`;
+                const escapeMd = (str) => str.replace(/_/g, '\\_'); // Escape underscores for Markdown
+
+                let msg = `✅ *Muvaffaqiyatli qo'shildi:*\n${validChannels.map(escapeMd).join('\n')}\n`;
                 if (invalidChannels.length > 0) {
-                    msg += `\n❌ **Qo'shilmadi (Bot admin emas yoki xato):**\n${invalidChannels.join('\n')}\n`;
+                    msg += `\n❌ *Qo'shilmadi (Bot admin emas yoki xato):*\n${invalidChannels.map(escapeMd).join('\n')}\n`;
                 }
                 msg += `\nYana qo'shishingiz yoki "✅ Tayyor" tugmasini bosishingiz mumkin.`;
 
@@ -153,7 +155,7 @@ const handleWizardStep = async (bot, msg) => {
                     reply_markup: { inline_keyboard: [[{ text: '✅ Tayyor', callback_data: 'wiz_channels_done' }]] }
                 });
             } else if (invalidChannels.length > 0) {
-                bot.sendMessage(chatId, `❌ **Hech qaysi kanal qoshilmadi:**\n\n${invalidChannels.join('\n')}\n\nIltimos, botni admin qiling va qayta urinib ko'ring.`);
+                bot.sendMessage(chatId, `❌ *Hech qaysi kanal qoshilmadi:*\n\n${invalidChannels.join('\n')}\n\nIltimos, botni admin qiling va qayta urinib ko'ring.`);
             }
         }
         return true;
@@ -203,7 +205,7 @@ const handleWizardCallback = async (bot, query) => {
         else if (setting === 'edit') currentSettings.allow_edit = !currentSettings.allow_edit;
         else if (setting === 'done') {
             sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.CHANNELS });
-            bot.editMessageText('📢 **Majburiy kanallarni sozlash**\n\nKanallar username-larini yuboring (masalan: @kanal).\n\nYoki "O\'tkazib yuborish" tugmasini bosing.', {
+            bot.editMessageText('📢 *Majburiy kanallarni sozlash*\n\nKanallar username-larini yuboring (masalan: @kanal).\n\nYoki "O\'tkazib yuborish" tugmasini bosing.', {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 parse_mode: 'Markdown',
@@ -227,7 +229,7 @@ const handleWizardCallback = async (bot, query) => {
         const now = new Date();
         const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         // Show Prompt
-        bot.sendMessage(chatId, '⏳ **Boshlanish vaqtini belgilash**\n\nSorovnoma qachon boshlanishini xohlaysiz?', {
+        bot.sendMessage(chatId, '⏳ *Boshlanish vaqtini belgilash*\n\nSorovnoma qachon boshlanishini xohlaysiz?', {
             reply_markup: {
                 inline_keyboard: [
                     [{ text: '📅 Vaqtni tanlash', callback_data: 'cal:start' }],
@@ -246,7 +248,7 @@ const handleWizardCallback = async (bot, query) => {
     if (data === 'cal:start') {
         const now = new Date();
         const kb = getCalendarKeyboard(now.getFullYear(), now.getMonth());
-        bot.editMessageText('📅 **Boshlanish sanasini tanlang:**', {
+        bot.editMessageText('📅 *Boshlanish sanasini tanlang:*', {
             chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
         });
         return bot.answerCallbackQuery(query.id);
@@ -254,7 +256,7 @@ const handleWizardCallback = async (bot, query) => {
 
     if (data === 'wiz_skip_start') {
         sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.END_TIME, data: { ...session.data, start_time: null } });
-        bot.editMessageText('⏳ **Tugash vaqtini belgilash**\n\nSorovnoma qachon tugashini xohlaysiz?', {
+        bot.editMessageText('⏳ *Tugash vaqtini belgilash*\n\nSorovnoma qachon tugashini xohlaysiz?', {
             chat_id: chatId,
             message_id: query.message.message_id,
             reply_markup: {
@@ -271,7 +273,7 @@ const handleWizardCallback = async (bot, query) => {
         // Use logic start time or now
         const now = new Date();
         const kb = getCalendarKeyboard(now.getFullYear(), now.getMonth());
-        bot.editMessageText('📅 **Tugash sanasini tanlang:**', {
+        bot.editMessageText('📅 *Tugash sanasini tanlang:*', {
             chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
         });
         return bot.answerCallbackQuery(query.id);
@@ -289,7 +291,7 @@ const handleWizardCallback = async (bot, query) => {
         const [_, __, yStr, mStr] = data.split(':');
         const kb = getCalendarKeyboard(parseInt(yStr), parseInt(mStr));
         const currentStep = session.step === WIZARD_STEPS.START_TIME ? 'Boshlanish' : 'Tugash';
-        bot.editMessageText(`📅 **${currentStep} sanasini tanlang:**`, {
+        bot.editMessageText(`📅 *${currentStep} sanasini tanlang:*`, {
             chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
         });
         return bot.answerCallbackQuery(query.id);
@@ -299,7 +301,7 @@ const handleWizardCallback = async (bot, query) => {
     if (data.startsWith('cal:date:')) {
         const dateStr = data.split(':')[2];
         const kb = getTimeKeyboard(dateStr, 'hour');
-        bot.editMessageText(`🕒 **Soatni tanlang:** (${dateStr})`, {
+        bot.editMessageText(`🕒 *Soatni tanlang:* (${dateStr})`, {
             chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
         });
         return bot.answerCallbackQuery(query.id);
@@ -309,7 +311,7 @@ const handleWizardCallback = async (bot, query) => {
     if (data.startsWith('time:h:')) {
         const [_, __, dateStr, hour] = data.split(':');
         const kb = getTimeKeyboard(dateStr, 'minute', hour);
-        bot.editMessageText(`🕒 **Daqiqani tanlang:** (${dateStr} ${hour}:00)`, {
+        bot.editMessageText(`🕒 *Daqiqani tanlang:* (${dateStr} ${hour}:00)`, {
             chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
         });
         return bot.answerCallbackQuery(query.id);
@@ -326,7 +328,7 @@ const handleWizardCallback = async (bot, query) => {
                 data: { ...session.data, start_time: fullTimeStr }
             });
             // Prompt End Time
-            bot.editMessageText(`✅ Boshlanish vaqti: ${fullTimeStr}\n\n⏳ **Tugash vaqtini belgilash**`, {
+            bot.editMessageText(`✅ Boshlanish vaqti: ${fullTimeStr}\n\n⏳ *Tugash vaqtini belgilash*`, {
                 chat_id: chatId,
                 message_id: query.message.message_id,
                 reply_markup: {
@@ -372,7 +374,7 @@ const sendSettingsMenu = (bot, chatId, settings) => {
         ],
         [{ text: 'Davom etish ➡️', callback_data: 'wiz_set:done' }]
     ];
-    bot.sendMessage(chatId, '⚙️ **Sozlamalar**', { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, '⚙️ *Sozlamalar*', { reply_markup: { inline_keyboard: keyboard }, parse_mode: 'Markdown' });
 };
 
 const editSettingsMenu = (bot, chatId, msgId, settings) => {
@@ -387,9 +389,9 @@ const editSettingsMenu = (bot, chatId, msgId, settings) => {
 };
 
 const showConfirmation = async (bot, chatId, data) => {
-    let text = `📝 **Sorovnoma Tasdiqlash**\n\n❓ **Savol:** ${data.question}\n\n📋 **Variantlar:**\n${data.options.map(o => `- ${o}`).join('\n')}\n\n⚙️ **Sozlamalar:**\n- Ko'p tanlovli: ${data.settings.multiple_choice ? '✅' : '❌'}\n- O'zgartirish: ${data.settings.allow_edit ? '✅' : '❌'}\n\n📢 **Kanallar:** ${data.channels.length > 0 ? data.channels.join(', ') : 'Yo\'q'}\n`;
+    let text = `📝 *Sorovnoma Tasdiqlash*\n\n❓ *Savol:* ${data.question}\n\n📋 *Variantlar:*\n${data.options.map(o => `- ${o}`).join('\n')}\n\n⚙️ *Sozlamalar:*\n- Ko'p tanlovli: ${data.settings.multiple_choice ? '✅' : '❌'}\n- O'zgartirish: ${data.settings.allow_edit ? '✅' : '❌'}\n\n📢 *Kanallar:* ${data.channels.length > 0 ? data.channels.join(', ') : 'Yo\'q'}\n`;
 
-    text += `\n🕒 **Vaqt:**\n`;
+    text += `\n🕒 *Vaqt:*\n`;
     text += `- Boshlanish: ${data.start_time || 'Hozir'}\n`;
     text += `- Tugash: ${data.end_time || 'Cheksiz'}\n`;
 
@@ -424,7 +426,7 @@ const createPollInDb = async (bot, userId, data) => {
         const startStr = data.start_time ? new Date(data.start_time).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
         const endStr = data.end_time ? new Date(data.end_time).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
 
-        await bot.sendMessage(userId, `✅ **Sorovnoma tayyor!**\n\n🆔 ID: #${pollId}\n🕑 Boshlanish: ${startStr}\n🏁 Tugash: ${endStr}`);
+        await bot.sendMessage(userId, `✅ *Sorovnoma tayyor!*\n\n🆔 ID: #${pollId}\n🕑 Boshlanish: ${startStr}\n🏁 Tugash: ${endStr}`);
         await sendPoll(bot, userId, pollId, (await bot.getMe()).username);
     } catch (e) {
         console.error('DB Error:', e);
