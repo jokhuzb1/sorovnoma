@@ -49,24 +49,29 @@ function getPollResults(pollId) {
     const countsMap = {};
     voteCounts.forEach(row => countsMap[row.option_id] = row.count);
 
-    let text = `📊 **Sorovnoma Natijalari** (#${pollId})\n\n`;
-    text += `📝 ${poll.description}\n\n`;
+    let text = `📊 Sorovnoma Natijalari (#${pollId})\n\n`;
+    text += `📝 ${poll.description.replace(/<[^>]*>/g, '')}\n\n`;
 
-    // Calculate max votes for leader(s)
-    let maxVotes = 0;
-    options.forEach(opt => {
-        const c = countsMap[opt.id] || 0;
-        if (c > maxVotes) maxVotes = c;
-    });
+    // Create array with counts
+    const results = options.map(opt => ({
+        text: opt.text,
+        count: countsMap[opt.id] || 0
+    }));
 
-    options.forEach(opt => {
-        const count = countsMap[opt.id] || 0;
-        const percent = totalVotes > 0 ? ((count / totalVotes) * 100).toFixed(1) : 0;
+    // Sort by count descending
+    results.sort((a, b) => b.count - a.count);
 
-        let marker = '▫️';
-        if (maxVotes > 0 && count === maxVotes) marker = '🏆';
+    let rank = 0;
+    let lastCount = -1;
 
-        text += `${marker} ${opt.text}: <b>${count}</b> ovoz (${percent}%)\n`;
+    results.forEach(item => {
+        if (item.count !== lastCount) {
+            rank++;
+            lastCount = item.count;
+        }
+
+        const percent = totalVotes > 0 ? ((item.count / totalVotes) * 100).toFixed(1) : 0;
+        text += `${rank}. ${item.text}: ${item.count} ovoz (${percent}%)\n`;
     });
 
     text += `\n👥 Jami ovozlar: ${totalVotes}`;
