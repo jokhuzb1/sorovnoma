@@ -67,11 +67,10 @@ async function handleSuperAdminAction(bot, query) {
     if (!isSuperAdmin(from.id)) return bot.answerCallbackQuery(query.id, { text: '⛔ Super Admin Only', show_alert: true });
 
     if (action === 'add') {
-        // This needs state. For now, simple prompt or instruction.
-        // Original had "admin:add" and state? 
-        // Let's rely on basic text prompt if we can't easily add state here without session.
-        // OR send a force_reply?
-        bot.sendMessage(message.chat.id, '🆔 Admin qilmoqchi bo\'lgan foydalanuvchi ID sini va rolini yuboring:\nFormat: `/add_admin 123456789 admin`');
+        const { adminState } = require('./messageHandler');
+        adminState.set(from.id, { step: 'waiting_for_id' });
+
+        bot.sendMessage(message.chat.id, '🆔 **Yangi Super Admin qo\'shish**\n\nIltimos, foydalanuvchining ID raqamini yuboring:\n(Bekor qilish uchun /cancel)', { reply_markup: { remove_keyboard: true } });
         bot.answerCallbackQuery(query.id);
     }
     else if (action === 'remove') {

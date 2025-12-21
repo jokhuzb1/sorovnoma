@@ -7,6 +7,7 @@ const sessionService = require('../services/sessionService');
 
 // Broadcast State (In-memory)
 const broadcastState = new Map();
+const adminState = new Map();
 
 async function handleMessage(bot, msg) {
     const chatId = msg.chat.id;
@@ -18,6 +19,33 @@ async function handleMessage(bot, msg) {
 
     // 1. Wizard Check
     if (await handleWizardStep(bot, msg)) return;
+
+    // --- Admin Add State ---
+    if (adminState.has(userId)) {
+        if (text === '/cancel') {
+            adminState.delete(userId);
+            return bot.sendMessage(chatId, '❌ Bekor qilindi.', { reply_markup: getMainMenu(userId) });
+        }
+
+        const state = adminState.get(userId);
+        if (state.step === 'waiting_for_id') {
+            // Validate ID
+            if (!/^\d+$/.test(text)) {
+                return bot.sendMessage(chatId, '⚠️ Iltimos, faqat raqamli ID yuboring (yoki /cancel):');
+            }
+
+            const targetId = parseInt(text, 10);
+            try {
+                // Always create as SUPER ADMIN as requested
+                db.prepare('INSERT OR REPLACE INTO admins (user_id, role) VALUES (?, ?)').run(targetId, 'super_admin');
+                bot.sendMessage(chatId, `✅ **Muvaffaqiyatli!**\n\nFoydalanuvchi (${targetId}) **Super Admin** etib tayinlandi.`);
+            } catch (e) {
+                bot.sendMessage(chatId, '❌ Xatolik: ' + e.message);
+            }
+            adminState.delete(userId);
+            return;
+        }
+    }
 
     if (broadcastState.has(userId)) {
         const state = broadcastState.get(userId);
@@ -65,7 +93,32 @@ async function handleMessage(bot, msg) {
         }
     }
 
+    // Broadcast Confirm Logic (above) ...
+
     if (!text) return;
+
+    // --- /start Handler ---
+    if (text.startsWith('/start')) {
+        const parts = text.split(' ');
+        if (parts.length > 1) {
+            // Deep linking handling
+            const payload = parts[1];
+            if (payload.startsWith('poll_')) {
+                const pollId = payload.split('_')[1];
+                const { sendPoll } = require('../services/pollService'); // Lazy load to avoid cycle if any
+                await sendPoll(bot, chatId, pollId);
+                return;
+            }
+        }
+
+        // Default Welcome
+        const welcomeText = `👋 **Assalomu alaykum!**\n\nSiz ushbu bot orqali so'rovnomalarda qatnashishingiz mumkin.\nAdminlar yangiliklari va so'rovnomalarini kuting.`;
+        if (isAdmin(userId)) {
+            return bot.sendMessage(chatId, welcomeText, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
+        } else {
+            return bot.sendMessage(chatId, welcomeText, { parse_mode: 'Markdown', reply_markup: { remove_keyboard: true } });
+        }
+    }
 
     // 2. Global Menu Handling
     if (text === MESSAGES.NEW_POLL) {
@@ -244,4 +297,4 @@ function getMainMenu(userId) {
     return { keyboard: [[MESSAGES.HELP]], resize_keyboard: true };
 }
 
-module.exports = { handleMessage, sendPollList, broadcastState };
+module.exports = { handleMessage, sendPollList, broadcastState, adminState };
