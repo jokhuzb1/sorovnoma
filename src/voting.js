@@ -92,7 +92,7 @@ function generateSharablePollContent(pollId, botUsername) {
     voteCounts.forEach(row => countsMap[row.option_id] = row.count);
 
     // Caption: Descripton + Bold Instruction (No Link)
-    let caption = `<b>${poll.description}</b>\n\n👇 <b>lashish uchun quyidagi tugmani bosing!</b>👇`;
+    let caption = `<b>${poll.description}</b>\n\n👇 <b>Ulashish uchun quyidagi tugmani bosing!</b>👇`;
 
     // Show vote counts in buttons (Text + Count only)
     const inline_keyboard = options.map(opt => {
