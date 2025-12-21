@@ -3,23 +3,6 @@ const { executeVoteTransaction } = require('../services/voteService');
 const { updatePollMessage, updateSharedPolls, getPollResults } = require('../services/pollService');
 const { checkChannelMembership } = require('../services/channelService');
 
-const updateQueue = new Map();
-
-// Update Looper
-setInterval(async () => {
-    if (updateQueue.size === 0) return;
-    const updates = Array.from(updateQueue.values());
-    updateQueue.clear();
-    const batches = ((arr, size) => Array.from({ length: Math.ceil(arr.length / size) }, (v, i) => arr.slice(i * size, i * size + size)))(updates, 10);
-
-    for (const batch of batches) {
-        await Promise.all(batch.map(u =>
-            updatePollMessage(u.bot, u.chatId, u.messageId, u.pollId, u.inlineMessageId, u.botUsername)
-                .catch(e => console.error('Update Failed:', e.message))
-        ));
-    }
-}, 200);
-
 const processingCache = new Set();
 const throttleTime = 200;
 
@@ -100,16 +83,20 @@ async function handleVote(bot, query, botUsername) {
 
         bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false });
 
-        // Queue Updates
+        // Immediate Update
         const chatId = message ? message.chat.id : null;
         const messageId = message ? message.message_id : null;
-        const key = inline_message_id ? `inline:${inline_message_id}` : `${chatId}:${messageId}`;
 
-        if (!updateQueue.has(key)) {
-            updateQueue.set(key, { bot, chatId, messageId, pollId, inlineMessageId: inline_message_id, botUsername });
+        try {
+            await updatePollMessage(bot, chatId, messageId, pollId, inline_message_id, botUsername);
+        } catch (e) {
+            console.error('Update Poll Error:', e.message);
         }
 
-        await updateSharedPolls(bot, pollId, botUsername);
+        // Background update for others (if any shared instances exist not covered by above)
+        // Note: updateSharedPolls might be heavy, consider running it without await if it blocks too much, 
+        // but for "instant" feel on the clicked message, the above await is key.
+        updateSharedPolls(bot, pollId, botUsername).catch(err => console.error('Shared Update Error:', err.message));
 
     } catch (e) {
         // Don't log expected logic errors to console, just show to user
