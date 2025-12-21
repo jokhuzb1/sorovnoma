@@ -28,4 +28,23 @@ async function checkChannelMembership(bot, userId, requiredChannels) {
     return results.filter(r => r !== null);
 }
 
-module.exports = { checkChannelMembership };
+async function verifyBotAdmin(bot, channelUsername) {
+    try {
+        const chat = await bot.getChat(channelUsername);
+        const botId = (await bot.getMe()).id;
+        const member = await bot.getChatMember(chat.id, botId);
+
+        if (member.status === 'administrator' || member.status === 'creator') {
+            return { success: true, title: chat.title, id: chat.id };
+        } else {
+            return { success: false, error: `Bot ${chat.title} kanalida admin emas!` };
+        }
+    } catch (e) {
+        if (e.message.includes('chat not found')) {
+            return { success: false, error: `Kanal topilmadi: ${channelUsername}` };
+        }
+        return { success: false, error: `Xatolik (${channelUsername}): ${e.message}` };
+    }
+}
+
+module.exports = { checkChannelMembership, verifyBotAdmin };

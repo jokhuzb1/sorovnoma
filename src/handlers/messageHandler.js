@@ -259,6 +259,8 @@ async function sendPollList(bot, chatId, userId, type = 'active', page = 0, msgI
         buttons.push([{ text: `${statusIcon} #${p.id} - ${desc}`, callback_data: `manage:${p.id}` }]);
     });
 
+
+
     // Navigation Buttons
     const navRow = [];
     if (page > 0) {

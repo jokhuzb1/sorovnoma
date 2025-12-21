@@ -16,7 +16,12 @@ const WIZARD_STEPS = {
     CONFIRM: 'confirm'
 };
 
+
+const { verifyBotAdmin } = require('../services/channelService'); // Import verification service
+
 const startWizard = async (bot, userId, chatId) => {
+    // ... (startWizard content unchanged for now, just preserving context if needed, but we are editing handleWizardStep below mostly)
+    // Actually startWizard is separate.
     sessionService.updateWizardSession(userId, {
         step: WIZARD_STEPS.MEDIA,
         data: {
@@ -50,7 +55,6 @@ const handleWizardStep = async (bot, msg) => {
     const text = msg.text;
 
     // --- BUG FIX: Check for Global Commands ---
-    // If text matches any main menu button or starts with /, cancel wizard
     const globalCommands = Object.values(MESSAGES);
     if (text && (globalCommands.includes(text) || text.startsWith('/'))) {
         if (text === '/cancel') {
@@ -119,20 +123,37 @@ const handleWizardStep = async (bot, msg) => {
         if (text) {
             const channels = text.split(/[,\s]+/).filter(c => c.length > 1);
             const validChannels = [];
+            const invalidChannels = [];
+
             for (const ch of channels) {
                 let username = ch.replace('https://t.me/', '').replace('@', '');
-                try {
-                    validChannels.push('@' + username);
-                } catch (e) {
+                username = '@' + username; // Normalized
+
+                const result = await verifyBotAdmin(bot, username);
+                if (result.success) {
+                    validChannels.push(username); // Can store title if needed, currently storing username string
+                } else {
+                    invalidChannels.push(`${username} (${result.error})`);
                 }
             }
 
             if (validChannels.length > 0) {
                 const currentChannels = session.data.channels || [];
-                sessionService.updateWizardSession(userId, { data: { ...session.data, channels: [...currentChannels, ...validChannels] } });
-                bot.sendMessage(chatId, `✅ Qo'shildi: ${validChannels.join(', ')}\n\nYana qo'shishingiz yoki "✅ Tayyor" tugmasini bosishingiz mumkin.`, {
+                const newChannels = [...new Set([...currentChannels, ...validChannels])]; // Unique
+                sessionService.updateWizardSession(userId, { data: { ...session.data, channels: newChannels } });
+
+                let msg = `✅ **Muvaffaqiyatli qo'shildi:**\n${validChannels.join('\n')}\n`;
+                if (invalidChannels.length > 0) {
+                    msg += `\n❌ **Qo'shilmadi (Bot admin emas yoki xato):**\n${invalidChannels.join('\n')}\n`;
+                }
+                msg += `\nYana qo'shishingiz yoki "✅ Tayyor" tugmasini bosishingiz mumkin.`;
+
+                bot.sendMessage(chatId, msg, {
+                    parse_mode: 'Markdown',
                     reply_markup: { inline_keyboard: [[{ text: '✅ Tayyor', callback_data: 'wiz_channels_done' }]] }
                 });
+            } else if (invalidChannels.length > 0) {
+                bot.sendMessage(chatId, `❌ **Hech qaysi kanal qoshilmadi:**\n\n${invalidChannels.join('\n')}\n\nIltimos, botni admin qiling va qayta urinib ko'ring.`);
             }
         }
         return true;
@@ -398,7 +419,11 @@ const createPollInDb = async (bot, userId, data) => {
             insertChannel.run(pollId, ch, null, ch);
         }
 
-        await bot.sendMessage(userId, `✅ **Sorovnoma tayyor!**\nID: #${pollId}`);
+        // Format Dates
+        const startStr = data.start_time ? new Date(data.start_time).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
+        const endStr = data.end_time ? new Date(data.end_time).toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
+
+        await bot.sendMessage(userId, `✅ **Sorovnoma tayyor!**\n\n🆔 ID: #${pollId}\n🕑 Boshlanish: ${startStr}\n🏁 Tugash: ${endStr}`);
         await sendPoll(bot, userId, pollId, (await bot.getMe()).username);
     } catch (e) {
         console.error('DB Error:', e);

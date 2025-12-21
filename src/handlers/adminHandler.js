@@ -107,7 +107,11 @@ async function refreshManagementMessage(bot, chatId, msgId, pollId, isNew = fals
     if (start && now < start) status = '⏳ Boshlanmagan';
     if (end && now > end) status = '🔒 Yopiq';
 
-    const text = `🆔 **Poll #${pollId}**\n\n📝 ${poll.description}\n\n📊 Status: ${status}\n\nQanday amal bajarasiz?`;
+    // Format Dates
+    const startStr = start ? start.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
+    const endStr = end ? end.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent' }) : 'Belgilanmagan';
+
+    const text = `🆔 **Poll #${pollId}**\n\n📝 ${poll.description}\n\n📊 Status: ${status}\n🕑 Boshlanish: ${startStr}\n🏁 Tugash: ${endStr}\n\nQanday amal bajarasiz?`;
 
     try {
         if (isNew || !msgId) {
