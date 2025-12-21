@@ -67,7 +67,7 @@ bot.on('callback_query', async (query) => {
         } else if (data === 'super:add') {
             handleSuperAdminAction(bot, query);
         }
-    } else if (data.startsWith('wiz_')) {
+    } else if (data.startsWith('wiz_') || data.startsWith('cal:') || data.startsWith('time:')) {
         handleWizardCallback(bot, query);
     } else if (data.startsWith('manage:')) {
         const pollId = data.split(':')[1];

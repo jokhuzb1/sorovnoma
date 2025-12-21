@@ -3,12 +3,16 @@ const sessionService = require('../services/sessionService');
 const { sendPoll } = require('../services/pollService');
 const { MESSAGES } = require('../config/constants');
 
+const { getCalendarKeyboard, getTimeKeyboard } = require('../utils/calendarUtils');
+
 const WIZARD_STEPS = {
     MEDIA: 'media',
     QUESTION: 'question',
     OPTIONS: 'options',
     SETTINGS: 'settings',
     CHANNELS: 'channels',
+    START_TIME: 'start_time',
+    END_TIME: 'end_time',
     CONFIRM: 'confirm'
 };
 
@@ -20,7 +24,9 @@ const startWizard = async (bot, userId, chatId) => {
             options: [],
             settings: { multiple_choice: false, allow_edit: false },
             channels: [],
-            media: null
+            media: null,
+            start_time: null,
+            end_time: null
         }
     });
 
@@ -48,12 +54,10 @@ const handleWizardStep = async (bot, msg) => {
     const globalCommands = Object.values(MESSAGES);
     if (text && (globalCommands.includes(text) || text.startsWith('/'))) {
         if (text === '/cancel') {
-            // Explicit cancel handled here
             sessionService.clearWizardSession(userId);
             bot.sendMessage(chatId, '❌ Bekor qilindi.');
             return true;
         }
-        // Yield to global handler
         sessionService.clearWizardSession(userId);
         return false;
     }
@@ -118,11 +122,6 @@ const handleWizardStep = async (bot, msg) => {
             for (const ch of channels) {
                 let username = ch.replace('https://t.me/', '').replace('@', '');
                 try {
-                    // Just store as @username for now, resolving handled in creation or here?
-                    // Original code resolved.
-                    // We can skip deep resolution here to save time or keep it. original kept it.
-                    // I will keep it simple: assume user knows what they are doing or needs valid channel.
-                    // Actually, let's just accept strings for now to avoid async complexity in this handler if bot isn't admin yet.
                     validChannels.push('@' + username);
                 } catch (e) {
                 }
@@ -139,6 +138,11 @@ const handleWizardStep = async (bot, msg) => {
         return true;
     }
 
+    /* --- STEP 6, 7: TIME (Interaction only) --- */
+    if (step === WIZARD_STEPS.START_TIME || step === WIZARD_STEPS.END_TIME) {
+        return true; // Wait for inline input
+    }
+
     return false;
 };
 
@@ -148,7 +152,8 @@ const handleWizardCallback = async (bot, query) => {
     const data = query.data;
     const session = sessionService.getWizardSession(userId);
 
-    if (!session && !data.startsWith('wiz_')) return;
+    // Allow cal/time callbacks even if step check is loose, but strict is better
+    if (!session && !data.startsWith('wiz_') && !data.startsWith('cal:') && !data.startsWith('time:')) return;
 
     if (data === 'wiz_skip_media') {
         if (!session) return bot.answerCallbackQuery(query.id, { text: 'Sessiya eskirgan.' });
@@ -194,11 +199,132 @@ const handleWizardCallback = async (bot, query) => {
 
     if (data === 'wiz_channels_skip' || data === 'wiz_channels_done') {
         if (!session) return;
-        sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.CONFIRM });
-        showConfirmation(bot, chatId, sessionService.getWizardSession(userId).data);
+
+        // Move to Start Time
+        sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.START_TIME });
+
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        // Show Prompt
+        bot.sendMessage(chatId, '⏳ **Boshlanish vaqtini belgilash**\n\nSorovnoma qachon boshlanishini xohlaysiz?', {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '📅 Vaqtni tanlash', callback_data: 'cal:start' }],
+                    [{ text: '⏭️ O\'tkazib yuborish (Hozir)', callback_data: 'wiz_skip_start' }]
+                ]
+            }
+        });
+
         bot.answerCallbackQuery(query.id);
         return;
     }
+
+    // --- START / END TIME HANDLERS ---
+
+    // 1. Initial Triggers
+    if (data === 'cal:start') {
+        const now = new Date();
+        const kb = getCalendarKeyboard(now.getFullYear(), now.getMonth());
+        bot.editMessageText('📅 **Boshlanish sanasini tanlang:**', {
+            chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
+        });
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    if (data === 'wiz_skip_start') {
+        sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.END_TIME, data: { ...session.data, start_time: null } });
+        bot.editMessageText('⏳ **Tugash vaqtini belgilash**\n\nSorovnoma qachon tugashini xohlaysiz?', {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '📅 Vaqtni tanlash', callback_data: 'cal:end' }],
+                    [{ text: '⏭️ O\'tkazib yuborish (Cheksiz)', callback_data: 'wiz_skip_end' }]
+                ]
+            }
+        });
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    if (data === 'cal:end') {
+        // Use logic start time or now
+        const now = new Date();
+        const kb = getCalendarKeyboard(now.getFullYear(), now.getMonth());
+        bot.editMessageText('📅 **Tugash sanasini tanlang:**', {
+            chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
+        });
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    if (data === 'wiz_skip_end') {
+        sessionService.updateWizardSession(userId, { step: WIZARD_STEPS.CONFIRM, data: { ...session.data, end_time: null } });
+        showConfirmation(bot, chatId, sessionService.getWizardSession(userId).data);
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    // 2. Calendar Navigation
+    if (data.startsWith('cal:nav:')) {
+        const [_, __, yStr, mStr] = data.split(':');
+        const kb = getCalendarKeyboard(parseInt(yStr), parseInt(mStr));
+        const currentStep = session.step === WIZARD_STEPS.START_TIME ? 'Boshlanish' : 'Tugash';
+        bot.editMessageText(`📅 **${currentStep} sanasini tanlang:**`, {
+            chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
+        });
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    // 3. Date Selected -> Show Hour
+    if (data.startsWith('cal:date:')) {
+        const dateStr = data.split(':')[2];
+        const kb = getTimeKeyboard(dateStr, 'hour');
+        bot.editMessageText(`🕒 **Soatni tanlang:** (${dateStr})`, {
+            chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
+        });
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    // 4. Hour Selected -> Show Minute
+    if (data.startsWith('time:h:')) {
+        const [_, __, dateStr, hour] = data.split(':');
+        const kb = getTimeKeyboard(dateStr, 'minute', hour);
+        bot.editMessageText(`🕒 **Daqiqani tanlang:** (${dateStr} ${hour}:00)`, {
+            chat_id: chatId, message_id: query.message.message_id, reply_markup: kb
+        });
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    // 5. Minute Selected -> Save & Next
+    if (data.startsWith('time:m:')) {
+        const [_, __, dateStr, hour, minute] = data.split(':');
+        const fullTimeStr = `${dateStr} ${hour}:${minute}:00`; // SQL Format
+
+        if (session.step === WIZARD_STEPS.START_TIME) {
+            sessionService.updateWizardSession(userId, {
+                step: WIZARD_STEPS.END_TIME,
+                data: { ...session.data, start_time: fullTimeStr }
+            });
+            // Prompt End Time
+            bot.editMessageText(`✅ Boshlanish vaqti: ${fullTimeStr}\n\n⏳ **Tugash vaqtini belgilash**`, {
+                chat_id: chatId,
+                message_id: query.message.message_id,
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '📅 Vaqtni tanlash', callback_data: 'cal:end' }],
+                        [{ text: '⏭️ O\'tkazib yuborish (Cheksiz)', callback_data: 'wiz_skip_end' }]
+                    ]
+                }
+            });
+        } else if (session.step === WIZARD_STEPS.END_TIME) {
+            sessionService.updateWizardSession(userId, {
+                step: WIZARD_STEPS.CONFIRM,
+                data: { ...session.data, end_time: fullTimeStr }
+            });
+            showConfirmation(bot, chatId, sessionService.getWizardSession(userId).data);
+        }
+        return bot.answerCallbackQuery(query.id);
+    }
+
+    // --- EXISTING ---
 
     if (data === 'wiz_create') {
         if (!session) return;
@@ -241,6 +367,10 @@ const editSettingsMenu = (bot, chatId, msgId, settings) => {
 const showConfirmation = async (bot, chatId, data) => {
     let text = `📝 **Sorovnoma Tasdiqlash**\n\n❓ **Savol:** ${data.question}\n\n📋 **Variantlar:**\n${data.options.map(o => `- ${o}`).join('\n')}\n\n⚙️ **Sozlamalar:**\n- Ko'p tanlovli: ${data.settings.multiple_choice ? '✅' : '❌'}\n- O'zgartirish: ${data.settings.allow_edit ? '✅' : '❌'}\n\n📢 **Kanallar:** ${data.channels.length > 0 ? data.channels.join(', ') : 'Yo\'q'}\n`;
 
+    text += `\n🕒 **Vaqt:**\n`;
+    text += `- Boshlanish: ${data.start_time || 'Hozir'}\n`;
+    text += `- Tugash: ${data.end_time || 'Cheksiz'}\n`;
+
     const markup = { inline_keyboard: [[{ text: '✅ Yaratish', callback_data: 'wiz_create' }], [{ text: '❌ Bekor qilish', callback_data: 'wiz_cancel' }]] };
 
     if (data.media) {
@@ -257,7 +387,7 @@ const createPollInDb = async (bot, userId, data) => {
         const mediaId = data.media ? data.media.id : null;
         const mediaType = data.media ? data.media.type : 'none';
 
-        const info = stmt.run(mediaId, mediaType, data.question, JSON.stringify(data.settings), null, null, userId, 1);
+        const info = stmt.run(mediaId, mediaType, data.question, JSON.stringify(data.settings), data.start_time, data.end_time, userId, 1);
         const pollId = info.lastInsertRowid;
 
         const insertOption = db.prepare('INSERT INTO options (poll_id, text) VALUES (?, ?)');

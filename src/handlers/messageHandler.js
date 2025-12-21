@@ -103,9 +103,30 @@ async function handleMessage(bot, msg) {
         if (parts.length > 1) {
             // Deep linking handling
             const payload = parts[1];
-            if (payload.startsWith('poll_')) {
+            if (payload.startsWith('poll_') || payload.startsWith('verify_')) {
                 const pollId = payload.split('_')[1];
-                const { sendPoll } = require('../services/pollService'); // Lazy load to avoid cycle if any
+                const { sendPoll } = require('../services/pollService');
+                const { checkChannelMembership } = require('../services/channelService');
+
+                // Check channels
+                const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
+                if (requiredChannels.length > 0) {
+                    const missing = await checkChannelMembership(bot, userId, requiredChannels);
+                    if (missing.length > 0) {
+                        let text = `⚠️ **Ovoz berish uchun quyidagi kanallarga a'zo bo'ling:**\n\n`;
+                        const buttons = [];
+
+                        missing.forEach(ch => {
+                            text += `• ${ch.title}\n`;
+                            if (ch.url) buttons.push([{ text: `➕ A'zo bo'lish (${ch.title})`, url: ch.url }]);
+                        });
+
+                        buttons.push([{ text: '✅ Tekshirish', callback_data: `check_sub:${pollId}` }]);
+
+                        return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons } });
+                    }
+                }
+
                 await sendPoll(bot, chatId, pollId);
                 return;
             }

@@ -34,6 +34,31 @@ async function handleVote(bot, query, botUsername) {
         return bot.answerCallbackQuery(id, { text: resultsText, show_alert: true });
     }
 
+    // Check Subscription Callback
+    if (type === 'check_sub') {
+        const pollId = parseInt(strPollId, 10);
+        const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
+        if (!poll) return bot.answerCallbackQuery(id, { text: '❌ Sorovnoma topilmadi.', show_alert: true });
+
+        const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
+        const { checkChannelMembership } = require('../services/channelService');
+        const missing = await checkChannelMembership(bot, userId, requiredChannels);
+
+        if (missing.length > 0) {
+            return bot.answerCallbackQuery(id, { text: '⚠️ Hali ham barcha kanallarga a\'zo bo\'lmadingiz!', show_alert: true });
+        }
+
+        await bot.answerCallbackQuery(id, { text: '✅ Muvaffaqiyatli! Ovoz berishingiz mumkin.' });
+        const { sendPoll } = require('../services/pollService');
+
+        // Delete the "Please join" message if possible and send poll, or just send poll
+        try {
+            await bot.deleteMessage(message.chat.id, message.message_id);
+        } catch (e) { }
+
+        return sendPoll(bot, message.chat.id, pollId, botUsername);
+    }
+
     if (type !== 'vote') return bot.answerCallbackQuery(id); // Ignored
 
     // Throttle
