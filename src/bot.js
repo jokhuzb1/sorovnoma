@@ -48,7 +48,7 @@ bot.onText(/\/add_admin (\d+) ?(.*)/, (msg, match) => {
 });
 
 bot.on('message', (msg) => {
-    handleMessage(bot, msg);
+    handleMessage(bot, msg).catch(e => console.error('HandleMessage Error:', e));
 });
 
 bot.on('callback_query', async (query) => {
