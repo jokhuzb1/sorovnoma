@@ -14,24 +14,24 @@ async function handleVote(bot, query, botUsername) {
     // Results
     if (type === 'results') {
         const resultsText = getPollResults(parseInt(strPollId));
-        return bot.answerCallbackQuery(id, { text: resultsText, show_alert: true });
+        return bot.answerCallbackQuery(id, { text: resultsText, show_alert: true }).catch(() => { });
     }
 
     // Check Subscription Callback
     if (type === 'check_sub') {
         const pollId = parseInt(strPollId, 10);
         const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
-        if (!poll) return bot.answerCallbackQuery(id, { text: '❌ Sorovnoma topilmadi.', show_alert: true });
+        if (!poll) return bot.answerCallbackQuery(id, { text: '❌ Sorovnoma topilmadi.', show_alert: true }).catch(() => { });
 
         const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
         const { checkChannelMembership } = require('../services/channelService');
         const missing = await checkChannelMembership(bot, userId, requiredChannels);
 
         if (missing.length > 0) {
-            return bot.answerCallbackQuery(id, { text: '⚠️ Hali ham barcha kanallarga a\'zo bo\'lmadingiz!', show_alert: true });
+            return bot.answerCallbackQuery(id, { text: '⚠️ Hali ham barcha kanallarga a\'zo bo\'lmadingiz!', show_alert: true }).catch(() => { });
         }
 
-        await bot.answerCallbackQuery(id, { text: '✅ Muvaffaqiyatli! Ovoz berishingiz mumkin.' });
+        await bot.answerCallbackQuery(id, { text: '✅ Muvaffaqiyatli! Ovoz berishingiz mumkin.' }).catch(() => { });
         const { sendPoll } = require('../services/pollService');
 
         // Delete the "Please join" message if possible and send poll, or just send poll
@@ -55,7 +55,7 @@ async function handleVote(bot, query, botUsername) {
         const optionId = parseInt(optionIdStr, 10);
         const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
 
-        if (!poll) return bot.answerCallbackQuery(id, { text: '❌ Sorovnoma topilmadi.', show_alert: true });
+        if (!poll) return bot.answerCallbackQuery(id, { text: '❌ Sorovnoma topilmadi.', show_alert: true }).catch(() => { });
 
         // Channel Check
         const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
@@ -66,7 +66,7 @@ async function handleVote(bot, query, botUsername) {
                 try {
                     await bot.answerCallbackQuery(id, { url: startBotUrl });
                 } catch (e) {
-                    await bot.answerCallbackQuery(id, { text: '⚠️ Kanallarga a\'zo bo\'ling!', show_alert: true });
+                    await bot.answerCallbackQuery(id, { text: '⚠️ Kanallarga a\'zo bo\'ling!', show_alert: true }).catch(() => { });
                 }
                 return;
             }
@@ -74,14 +74,14 @@ async function handleVote(bot, query, botUsername) {
 
         // Time Check
         const now = new Date();
-        if (poll.start_time && now < new Date(poll.start_time)) return bot.answerCallbackQuery(id, { text: '⏳ Hali boshlanmadi.', show_alert: true });
-        if (poll.end_time && now > new Date(poll.end_time)) return bot.answerCallbackQuery(id, { text: '🔒 Yopiq.', show_alert: true });
+        if (poll.start_time && now < new Date(poll.start_time)) return bot.answerCallbackQuery(id, { text: '⏳ Hali boshlanmadi.', show_alert: true }).catch(() => { });
+        if (poll.end_time && now > new Date(poll.end_time)) return bot.answerCallbackQuery(id, { text: '🔒 Yopiq.', show_alert: true }).catch(() => { });
 
         // Vote
         const settings = JSON.parse(poll.settings_json || '{}');
         let msg = executeVoteTransaction(pollId, userId, optionId, settings);
 
-        bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false });
+        bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false }).catch(() => { });
 
         // Immediate Update
         const chatId = message ? message.chat.id : null;
@@ -127,7 +127,7 @@ async function handleVote(bot, query, botUsername) {
         if (!knownErrors.includes(e.message)) {
             console.error('Vote Error:', e);
         }
-        bot.answerCallbackQuery(id, { text: e.message, show_alert: true });
+        bot.answerCallbackQuery(id, { text: e.message, show_alert: true }).catch(() => { });
     }
 }
 

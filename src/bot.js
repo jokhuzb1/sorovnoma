@@ -74,7 +74,7 @@ bot.on('message', (msg) => {
 bot.on('callback_query', async (query) => {
     const { data } = query;
     if (data.startsWith('vote:') || data.startsWith('results:') || data.startsWith('check_sub:')) {
-        handleVote(bot, query, BOT_USERNAME);
+        handleVote(bot, query, BOT_USERNAME).catch(e => console.error('Vote Handler Error:', e.message));
     } else if (data.startsWith('admin:')) {
         handleAdminCallback(bot, query);
     } else if (data.startsWith('broadcast:')) {
@@ -154,7 +154,7 @@ bot.on('inline_query', async (query) => {
                 };
             }
 
-            bot.answerInlineQuery(query.id, [result], { cache_time: 0 });
+            bot.answerInlineQuery(query.id, [result], { cache_time: 0 }).catch(() => { });
         }
     }
 });
