@@ -78,10 +78,9 @@ function getPollResults(pollId) {
     return text;
 }
 
-// Re-implemented updatePollMessage here to avoid circular dependencies if possible.
-// Or export it so voteHandler can use it.
 // Timeout cache for debouncing updates
 const updateTimeouts = new Map();
+let lastRateLimitLog = 0;
 
 async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null, botUsername = null) {
     const content = generatePollContent(pollId, botUsername);
@@ -97,7 +96,11 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
         }
     } catch (e) {
         if (e.response && e.response.statusCode === 429) {
-            console.warn(`Rate limit hit for poll ${pollId}, skipping update.`);
+            const now = Date.now();
+            if (now - lastRateLimitLog > 5000) {
+                console.warn(`⚠️ Rate limit hit (429). Skipping UI updates to prevent crash. (Log suppressed for 5s)`);
+                lastRateLimitLog = now;
+            }
             return;
         }
         if (e.message.includes('there is no caption') || e.message.includes('message is not modified')) {
