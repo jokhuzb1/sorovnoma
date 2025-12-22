@@ -80,6 +80,9 @@ function getPollResults(pollId) {
 
 // Re-implemented updatePollMessage here to avoid circular dependencies if possible.
 // Or export it so voteHandler can use it.
+// Timeout cache for debouncing updates
+const updateTimeouts = new Map();
+
 async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null, botUsername = null) {
     const content = generatePollContent(pollId, botUsername);
     if (!content) return;
@@ -93,6 +96,10 @@ async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId
             await bot.editMessageCaption(caption, { chat_id: chatId, message_id: messageId, reply_markup, parse_mode: 'HTML' });
         }
     } catch (e) {
+        if (e.response && e.response.statusCode === 429) {
+            console.warn(`Rate limit hit for poll ${pollId}, skipping update.`);
+            return;
+        }
         if (e.message.includes('there is no caption') || e.message.includes('message is not modified')) {
             if (e.message.includes('message is not modified')) return;
             try {
@@ -138,39 +145,54 @@ async function sendPoll(bot, chatId, pollId, botUsername) {
 }
 
 async function updateSharedPolls(bot, pollId, botUsername) {
-    // 1. Update Inline Shared Instances
-    const sharedInstances = db.prepare('SELECT inline_message_id FROM shared_polls WHERE poll_id = ?').all(pollId);
-    if (sharedInstances.length > 0) {
-        const content = generateSharablePollContent(pollId, botUsername);
-        if (content) {
-            for (const instance of sharedInstances) {
-                try {
-                    await bot.editMessageCaption(content.caption, {
-                        inline_message_id: instance.inline_message_id,
-                        reply_markup: content.reply_markup,
-                        parse_mode: 'HTML'
-                    });
-                } catch (e) {
-                    if (e.message.includes('MESSAGE_ID_INVALID')) {
-                        db.prepare('DELETE FROM shared_polls WHERE inline_message_id = ?').run(instance.inline_message_id);
+    // Debounce Logic
+    if (updateTimeouts.has(pollId)) {
+        clearTimeout(updateTimeouts.get(pollId));
+    }
+
+    const timeoutId = setTimeout(async () => {
+        updateTimeouts.delete(pollId);
+
+        // 1. Update Inline Shared Instances
+        const sharedInstances = db.prepare('SELECT inline_message_id FROM shared_polls WHERE poll_id = ?').all(pollId);
+        if (sharedInstances.length > 0) {
+            const content = generateSharablePollContent(pollId, botUsername);
+            if (content) {
+                for (const instance of sharedInstances) {
+                    try {
+                        await bot.editMessageCaption(content.caption, {
+                            inline_message_id: instance.inline_message_id,
+                            reply_markup: content.reply_markup,
+                            parse_mode: 'HTML'
+                        });
+                    } catch (e) {
+                        if (e.message.includes('MESSAGE_ID_INVALID')) {
+                            db.prepare('DELETE FROM shared_polls WHERE inline_message_id = ?').run(instance.inline_message_id);
+                        }
                     }
+                    // Tiny delay between instances to be nice to API
+                    await new Promise(r => setTimeout(r, 100));
                 }
             }
         }
-    }
 
-    // 2. Update Direct Messages
-    const directMessages = db.prepare('SELECT chat_id, message_id FROM poll_messages WHERE poll_id = ?').all(pollId);
-    if (directMessages.length > 0) {
-        for (const msg of directMessages) {
-            updatePollMessage(bot, msg.chat_id, msg.message_id, pollId, null, botUsername)
-                .catch(e => {
-                    if (e.message.includes('chat not found') || e.message.includes('forbidden') || e.message.includes('message to edit not found')) {
-                        db.prepare('DELETE FROM poll_messages WHERE chat_id = ? AND message_id = ?').run(msg.chat_id, msg.message_id);
-                    }
-                });
+        // 2. Update Direct Messages
+        const directMessages = db.prepare('SELECT chat_id, message_id FROM poll_messages WHERE poll_id = ?').all(pollId);
+        if (directMessages.length > 0) {
+            for (const msg of directMessages) {
+                updatePollMessage(bot, msg.chat_id, msg.message_id, pollId, null, botUsername)
+                    .catch(e => {
+                        if (e.message.includes('chat not found') || e.message.includes('forbidden') || e.message.includes('message to edit not found')) {
+                            db.prepare('DELETE FROM poll_messages WHERE chat_id = ? AND message_id = ?').run(msg.chat_id, msg.message_id);
+                        }
+                    });
+                // Tiny delay
+                await new Promise(r => setTimeout(r, 100));
+            }
         }
-    }
+    }, 2000); // 2 second debounce
+
+    updateTimeouts.set(pollId, timeoutId);
 }
 
 module.exports = {

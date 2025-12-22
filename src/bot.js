@@ -11,6 +11,12 @@ const { SUPER_ADMINS } = require('./services/adminService');
 
 // Notification Helper
 const notifyAdmins = async (error) => {
+    // Don't loop on 429 errors
+    if (error.response && error.response.statusCode === 429) {
+        console.warn('Suppressing 429 error notification');
+        return;
+    }
+
     const errorMsg = `🚨 **BOT ERROR:**\n\n\`${error.message || error}\``;
     /*
     for (const adminId of SUPER_ADMINS) {
@@ -21,7 +27,10 @@ const notifyAdmins = async (error) => {
     */
     // Use Promise.all for speed
     await Promise.all(SUPER_ADMINS.map(id =>
-        bot.sendMessage(id, errorMsg, { parse_mode: 'Markdown' }).catch(e => console.error('Notify fail:', e.message))
+        bot.sendMessage(id, errorMsg, { parse_mode: 'Markdown' }).catch(e => {
+            if (e.response && e.response.statusCode === 429) return; // Suppress infinite Loop
+            console.error('Notify fail:', e.message);
+        })
     ));
 };
 
