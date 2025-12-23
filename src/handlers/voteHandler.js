@@ -108,31 +108,24 @@ async function handleVote(bot, query, botUsername) {
         const settings = JSON.parse(poll.settings_json || '{}');
         let msg = executeVoteTransaction(pollId, userId, optionId, settings);
 
-        // --- 1. Immediate Feedback (Toast) ---
-        // Simple success message to close the loading spinner
-        let prefix = '✅ Ovoz qabul qilindi.';
-        if (msg.includes('ozgartirildi')) prefix = '🔄 Ovoz o\'zgartirildi.';
-
-        bot.answerCallbackQuery(id, { text: prefix, show_alert: false }).catch(() => { });
-
-        // --- 2. Detailed Stats via Private Message (Throttled) ---
+        // --- Simplified Feedback (Alert) ---
         try {
             const optionRow = db.prepare('SELECT text FROM options WHERE id = ?').get(optionId);
             let safeOpt = optionRow ? optionRow.text : 'Variant';
-            // if (safeOpt.length > 25) safeOpt = safeOpt.substring(0, 22) + '...'; // No need to truncate for PM
+            if (safeOpt.length > 50) safeOpt = safeOpt.substring(0, 47) + '...';
 
-            // Ensure we use the full version of results or compact?
-            // User said "like when we see natijalar". Admin handler uses getPollResults (full).
-            // Let's use getPollResults (Full) for the PM.
-            const stats = getPollResults(pollId);
+            let prefix = '✅ Ovoz qabul qilindi.';
+            if (msg.includes('ozgartirildi')) prefix = '🔄 Ovoz o\'zgartirildi.';
 
-            let messageText = `${prefix}\n\nSiz tanladingiz: <b>${safeOpt}</b>\n\n${stats}`;
+            // Just show what they voted for, no stats
+            let alertText = `${prefix}\n\nSiz tanladingiz: ${safeOpt}`;
 
-            // Queue this message to avoid 429s
-            sendSafeMessage(bot, userId, messageText, { parse_mode: 'HTML' });
+            bot.answerCallbackQuery(id, { text: alertText, show_alert: true }).catch(() => { });
 
         } catch (alertErr) {
-            console.error('Stats Message Error:', alertErr);
+            console.error('Alert Logic Error:', alertErr);
+            // Fallback
+            bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false }).catch(() => { });
         }
 
         // Immediate Update

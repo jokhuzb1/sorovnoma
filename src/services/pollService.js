@@ -257,7 +257,8 @@ async function sendSafeMessage(bot, chatId, text, options = {}) {
             await bot.sendMessage(chatId, text, options);
         } catch (e) {
             // Ignore blocks/not started errors to prevent log spam
-            if (!e.message.includes('forbidden') && !e.message.includes('chat not found')) {
+            const errLower = e.message.toLowerCase();
+            if (!errLower.includes('forbidden') && !errLower.includes('chat not found') && !errLower.includes('bot was blocked')) {
                 console.error(`SafeSend Error (${chatId}):`, e.message);
             }
         }
