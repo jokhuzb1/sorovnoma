@@ -251,6 +251,19 @@ function getCompactPollResults(pollId) {
     return text;
 }
 
+async function sendSafeMessage(bot, chatId, text, options = {}) {
+    queueUpdate(async () => {
+        try {
+            await bot.sendMessage(chatId, text, options);
+        } catch (e) {
+            // Ignore blocks/not started errors to prevent log spam
+            if (!e.message.includes('forbidden') && !e.message.includes('chat not found')) {
+                console.error(`SafeSend Error (${chatId}):`, e.message);
+            }
+        }
+    });
+}
+
 module.exports = {
     generatePollContent,
     generateSharablePollContent,
@@ -258,5 +271,6 @@ module.exports = {
     getCompactPollResults,
     sendPoll,
     updatePollMessage,
-    updateSharedPolls
+    updateSharedPolls,
+    sendSafeMessage
 };

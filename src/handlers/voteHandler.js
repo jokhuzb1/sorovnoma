@@ -108,31 +108,31 @@ async function handleVote(bot, query, botUsername) {
         const settings = JSON.parse(poll.settings_json || '{}');
         let msg = executeVoteTransaction(pollId, userId, optionId, settings);
 
-        // --- Stats Alert ---
+        // --- 1. Immediate Feedback (Toast) ---
+        // Simple success message to close the loading spinner
+        let prefix = '✅ Ovoz qabul qilindi.';
+        if (msg.includes('ozgartirildi')) prefix = '🔄 Ovoz o\'zgartirildi.';
+
+        bot.answerCallbackQuery(id, { text: prefix, show_alert: false }).catch(() => { });
+
+        // --- 2. Detailed Stats via Private Message (Throttled) ---
         try {
             const optionRow = db.prepare('SELECT text FROM options WHERE id = ?').get(optionId);
             let safeOpt = optionRow ? optionRow.text : 'Variant';
-            if (safeOpt.length > 25) safeOpt = safeOpt.substring(0, 22) + '...';
+            // if (safeOpt.length > 25) safeOpt = safeOpt.substring(0, 22) + '...'; // No need to truncate for PM
 
-            const stats = getCompactPollResults(pollId);
+            // Ensure we use the full version of results or compact?
+            // User said "like when we see natijalar". Admin handler uses getPollResults (full).
+            // Let's use getPollResults (Full) for the PM.
+            const stats = getPollResults(pollId);
 
-            let prefix = '✅ Ovoz qabul qilindi.';
-            if (msg.includes('ozgartirildi')) prefix = '🔄 Ovoz o\'zgartirildi.';
+            let messageText = `${prefix}\n\nSiz tanladingiz: <b>${safeOpt}</b>\n\n${stats}`;
 
-            let alertText = `${prefix}\n\nSiz tanladingiz: ${safeOpt}\n\n${stats}`;
+            // Queue this message to avoid 429s
+            sendSafeMessage(bot, userId, messageText, { parse_mode: 'HTML' });
 
-            // Safeguard 200 limit (Telegram Alert Limit)
-            if (alertText.length > 200) {
-                // Try to keep the user's choice visible, truncate stats
-                const diff = alertText.length - 197;
-                alertText = alertText.substring(0, 197) + '...';
-            }
-
-            bot.answerCallbackQuery(id, { text: alertText, show_alert: true }).catch(() => { });
         } catch (alertErr) {
-            console.error('Stats Alert Error:', alertErr);
-            // Fallback if stats fail
-            bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false }).catch(() => { });
+            console.error('Stats Message Error:', alertErr);
         }
 
         // Immediate Update
