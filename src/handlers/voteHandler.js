@@ -112,16 +112,25 @@ async function handleVote(bot, query, botUsername) {
         try {
             const optionRow = db.prepare('SELECT text FROM options WHERE id = ?').get(optionId);
             let safeOpt = optionRow ? optionRow.text : 'Variant';
-            if (safeOpt.length > 20) safeOpt = safeOpt.substring(0, 17) + '...';
+            if (safeOpt.length > 25) safeOpt = safeOpt.substring(0, 22) + '...';
 
             const stats = getCompactPollResults(pollId);
-            let alertText = `${msg}\nTanlandi: ${safeOpt}\n\n${stats}`;
 
-            // Safeguard 200 limit
-            if (alertText.length > 200) alertText = alertText.substring(0, 197) + '...';
+            let prefix = '✅ Ovoz qabul qilindi.';
+            if (msg.includes('ozgartirildi')) prefix = '🔄 Ovoz o\'zgartirildi.';
+
+            let alertText = `${prefix}\n\nSiz tanladingiz: ${safeOpt}\n\n${stats}`;
+
+            // Safeguard 200 limit (Telegram Alert Limit)
+            if (alertText.length > 200) {
+                // Try to keep the user's choice visible, truncate stats
+                const diff = alertText.length - 197;
+                alertText = alertText.substring(0, 197) + '...';
+            }
 
             bot.answerCallbackQuery(id, { text: alertText, show_alert: true }).catch(() => { });
         } catch (alertErr) {
+            console.error('Stats Alert Error:', alertErr);
             // Fallback if stats fail
             bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false }).catch(() => { });
         }
