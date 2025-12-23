@@ -1,6 +1,6 @@
 const db = require('../database/db');
 const { executeVoteTransaction } = require('../services/voteService');
-const { updatePollMessage, updateSharedPolls, getPollResults, getCompactPollResults } = require('../services/pollService');
+const { updatePollMessage, updateSharedPolls, getPollResults, getCompactPollResults, sendSafeMessage } = require('../services/pollService');
 const { checkChannelMembership } = require('../services/channelService');
 
 const processingCache = new Set();
