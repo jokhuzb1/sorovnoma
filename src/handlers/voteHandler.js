@@ -110,14 +110,9 @@ async function handleVote(bot, query, botUsername) {
                 // Send ephemeral hint or private message? 
                 // Since this is callback, we can't open URL and alert.
                 // We'll send a message to the user.
-                try {
-                    await bot.sendMessage(userId, '✅ *Ovoz qabul qilindi!*\n\nKanalga qaytish uchun tugmani bosing:', {
-                        parse_mode: 'Markdown',
-                        reply_markup: {
-                            inline_keyboard: [[{ text: '🔙 Kanalga qaytish', url: channelUrl }]]
-                        }
-                    });
-                } catch (e) { /* ignore if blocked */ }
+                // Removed 'Go back' message to reduce API load and prevent 429s.
+                // The user remains in the chat or can manually navigate back.
+
             }
         }
 

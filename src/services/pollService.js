@@ -82,6 +82,34 @@ function getPollResults(pollId) {
 const updateTimeouts = new Map();
 let lastRateLimitLog = 0;
 
+// --- GLOBAL UPDATE QUEUE ---
+const UPDATE_QUEUE = [];
+let isProcessingQueue = false;
+const PROCESS_INTERVAL_MS = 40; // ~25 req/sec (Conservative limit)
+
+async function processQueue() {
+    if (isProcessingQueue) return;
+    isProcessingQueue = true;
+
+    while (UPDATE_QUEUE.length > 0) {
+        const task = UPDATE_QUEUE.shift();
+        try {
+            await task();
+        } catch (e) {
+            // Suppress minor errors in queue
+        }
+        // Wait before next request
+        await new Promise(r => setTimeout(r, PROCESS_INTERVAL_MS));
+    }
+
+    isProcessingQueue = false;
+}
+
+function queueUpdate(task) {
+    UPDATE_QUEUE.push(task);
+    processQueue();
+}
+
 async function updatePollMessage(bot, chatId, messageId, pollId, inlineMessageId = null, botUsername = null) {
     const content = generatePollContent(pollId, botUsername);
     if (!content) return;
@@ -156,43 +184,44 @@ async function updateSharedPolls(bot, pollId, botUsername) {
     const timeoutId = setTimeout(async () => {
         updateTimeouts.delete(pollId);
 
-        // 1. Update Inline Shared Instances
+        // Fetch targets
         const sharedInstances = db.prepare('SELECT inline_message_id FROM shared_polls WHERE poll_id = ?').all(pollId);
-        if (sharedInstances.length > 0) {
-            const content = generateSharablePollContent(pollId, botUsername);
-            if (content) {
-                for (const instance of sharedInstances) {
-                    try {
-                        await bot.editMessageCaption(content.caption, {
-                            inline_message_id: instance.inline_message_id,
-                            reply_markup: content.reply_markup,
-                            parse_mode: 'HTML'
-                        });
-                    } catch (e) {
-                        if (e.message.includes('MESSAGE_ID_INVALID')) {
-                            db.prepare('DELETE FROM shared_polls WHERE inline_message_id = ?').run(instance.inline_message_id);
-                        }
+        const directMessages = db.prepare('SELECT chat_id, message_id FROM poll_messages WHERE poll_id = ?').all(pollId);
+
+        if (sharedInstances.length === 0 && directMessages.length === 0) return;
+
+        const content = generateSharablePollContent(pollId, botUsername);
+        if (!content) return;
+
+        // 1. Queue Inline Shared Instances
+        for (const instance of sharedInstances) {
+            queueUpdate(async () => {
+                try {
+                    await bot.editMessageCaption(content.caption, {
+                        inline_message_id: instance.inline_message_id,
+                        reply_markup: content.reply_markup,
+                        parse_mode: 'HTML'
+                    });
+                } catch (e) {
+                    if (e.message.includes('MESSAGE_ID_INVALID')) {
+                        try { db.prepare('DELETE FROM shared_polls WHERE inline_message_id = ?').run(instance.inline_message_id); } catch (ex) { }
                     }
-                    // Tiny delay between instances to be nice to API
-                    await new Promise(r => setTimeout(r, 100));
                 }
-            }
+            });
         }
 
-        // 2. Update Direct Messages
-        const directMessages = db.prepare('SELECT chat_id, message_id FROM poll_messages WHERE poll_id = ?').all(pollId);
-        if (directMessages.length > 0) {
-            for (const msg of directMessages) {
-                updatePollMessage(bot, msg.chat_id, msg.message_id, pollId, null, botUsername)
+        // 2. Queue Direct Messages
+        for (const msg of directMessages) {
+            queueUpdate(async () => {
+                await updatePollMessage(bot, msg.chat_id, msg.message_id, pollId, null, botUsername)
                     .catch(e => {
                         if (e.message.includes('chat not found') || e.message.includes('forbidden') || e.message.includes('message to edit not found')) {
-                            db.prepare('DELETE FROM poll_messages WHERE chat_id = ? AND message_id = ?').run(msg.chat_id, msg.message_id);
+                            try { db.prepare('DELETE FROM poll_messages WHERE chat_id = ? AND message_id = ?').run(msg.chat_id, msg.message_id); } catch (ex) { }
                         }
                     });
-                // Tiny delay
-                await new Promise(r => setTimeout(r, 100));
-            }
+            });
         }
+
     }, 2000); // 2 second debounce
 
     updateTimeouts.set(pollId, timeoutId);
