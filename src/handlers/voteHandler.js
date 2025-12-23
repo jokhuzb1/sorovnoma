@@ -1,6 +1,6 @@
 const db = require('../database/db');
 const { executeVoteTransaction } = require('../services/voteService');
-const { updatePollMessage, updateSharedPolls, getPollResults } = require('../services/pollService');
+const { updatePollMessage, updateSharedPolls, getPollResults, getCompactPollResults } = require('../services/pollService');
 const { checkChannelMembership } = require('../services/channelService');
 
 const processingCache = new Set();
@@ -55,7 +55,7 @@ async function handleVote(bot, query, botUsername) {
         const optionId = parseInt(optionIdStr, 10);
         const poll = db.prepare('SELECT * FROM polls WHERE id = ?').get(pollId);
 
-        if (!poll) return bot.answerCallbackQuery(id, { text: '❌ Sorovnoma topilmadi.', show_alert: true }).catch(() => { });
+        if (!poll) return bot.answerCallbackQuery(id, { text: '🚫 Kechirasiz, ushbu so\'rovnoma topilmadi yoki o\'chirilgan.', show_alert: true }).catch(() => { });
 
         // Channel Check
         const requiredChannels = db.prepare('SELECT * FROM required_channels WHERE poll_id = ?').all(pollId);
@@ -72,18 +72,62 @@ async function handleVote(bot, query, botUsername) {
             }
         }
 
-        // Time Check
+        // Time Check and Status Handling
         const now = new Date();
-        if (poll.start_time && now < new Date(poll.start_time)) return bot.answerCallbackQuery(id, { text: '⏳ Hali boshlanmadi.', show_alert: true }).catch(() => { });
-        if (poll.end_time && now > new Date(poll.end_time)) return bot.answerCallbackQuery(id, { text: '🔒 Yopiq.', show_alert: true }).catch(() => { });
+        const startTime = poll.start_time ? new Date(poll.start_time) : null;
+        const endTime = poll.end_time ? new Date(poll.end_time) : null;
+
+        const fmtDate = (d) => d ? d.toLocaleString('uz-UZ', { timeZone: 'Asia/Tashkent', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+
+        // Case: Not Found (Handled above, but if logic flows here unexpectedly)
+        if (!poll) {
+            return bot.answerCallbackQuery(id, {
+                text: '🚫 Kechirasiz, ushbu so\'rovnoma topilmadi yoki o\'chirilgan.\nAdmin bilan bog\'laning.',
+                show_alert: true
+            }).catch(() => { });
+        }
+
+        // Case: Not Started
+        if (startTime && now < startTime) {
+            return bot.answerCallbackQuery(id, {
+                text: `⚠️ So'rovnoma hali boshlanmagan.\n\n🕒 Boshlanish vaqti: ${fmtDate(startTime)}`,
+                show_alert: true
+            }).catch(() => { });
+        }
+
+        // Case: Closed
+        if (endTime && now > endTime) {
+            const finalStats = getCompactPollResults(pollId);
+            return bot.answerCallbackQuery(id, {
+                text: `🔒 So'rovnoma yakunlangan.\n\n🏁 Tugash vaqti: ${fmtDate(endTime)}\n\n📊 Natijalar:\n${finalStats}`,
+                show_alert: true
+            }).catch(() => { });
+        }
 
         // Vote
         const settings = JSON.parse(poll.settings_json || '{}');
         let msg = executeVoteTransaction(pollId, userId, optionId, settings);
 
-        bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false }).catch(() => { });
+        // --- Stats Alert ---
+        try {
+            const optionRow = db.prepare('SELECT text FROM options WHERE id = ?').get(optionId);
+            let safeOpt = optionRow ? optionRow.text : 'Variant';
+            if (safeOpt.length > 20) safeOpt = safeOpt.substring(0, 17) + '...';
+
+            const stats = getCompactPollResults(pollId);
+            let alertText = `${msg}\nTanlandi: ${safeOpt}\n\n${stats}`;
+
+            // Safeguard 200 limit
+            if (alertText.length > 200) alertText = alertText.substring(0, 197) + '...';
+
+            bot.answerCallbackQuery(id, { text: alertText, show_alert: true }).catch(() => { });
+        } catch (alertErr) {
+            // Fallback if stats fail
+            bot.answerCallbackQuery(id, { text: `✅ ${msg}`, show_alert: false }).catch(() => { });
+        }
 
         // Immediate Update
+
         const chatId = message ? message.chat.id : null;
         const messageId = message ? message.message_id : null;
 
