@@ -227,10 +227,35 @@ async function updateSharedPolls(bot, pollId, botUsername) {
     updateTimeouts.set(pollId, timeoutId);
 }
 
+function getCompactPollResults(pollId) {
+    const totalVotesRaw = db.prepare('SELECT COUNT(DISTINCT user_id) as count FROM votes WHERE poll_id = ?').get(pollId);
+    const totalVotes = totalVotesRaw ? totalVotesRaw.count : 0;
+
+    const options = db.prepare('SELECT * FROM options WHERE poll_id = ?').all(pollId);
+    const voteCounts = db.prepare('SELECT option_id, COUNT(*) as count FROM votes WHERE poll_id = ? GROUP BY option_id').all(pollId);
+    const countsMap = {};
+    voteCounts.forEach(row => countsMap[row.option_id] = row.count);
+
+    // Sort by count descending
+    options.sort((a, b) => (countsMap[b.id] || 0) - (countsMap[a.id] || 0));
+
+    let text = "";
+    options.forEach(opt => {
+        const count = countsMap[opt.id] || 0;
+        const percent = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+        // Truncate option text
+        let shortText = opt.text.length > 15 ? opt.text.substring(0, 12) + "..." : opt.text;
+        text += `${shortText}: ${count} (${percent}%)\n`;
+    });
+    text += `\nJami: ${totalVotes}`;
+    return text;
+}
+
 module.exports = {
     generatePollContent,
     generateSharablePollContent,
     getPollResults,
+    getCompactPollResults,
     sendPoll,
     updatePollMessage,
     updateSharedPolls
