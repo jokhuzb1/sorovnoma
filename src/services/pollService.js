@@ -19,7 +19,7 @@ function generatePollContent(pollId, botUsername) {
             text = text.substring(0, 37) + '...';
         }
         return [{
-            text: `${text} (${count})`,
+            text: `(${count}) ${text}`,
             callback_data: `vote:${pollId}:${opt.id}`
         }];
     });
