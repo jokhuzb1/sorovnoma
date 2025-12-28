@@ -170,7 +170,22 @@ async function handleBroadcastPoll(bot, chatId, messageId, pollId, confirm = fal
         parse_mode: 'Markdown'
     });
 
-    const users = db.prepare('SELECT user_id FROM users').all();
+    // Unified User List from all sources (excluding those who already received this poll)
+    const users = db.prepare(`
+        SELECT DISTINCT u.user_id 
+        FROM (
+            SELECT user_id FROM users
+            UNION
+            SELECT user_id FROM votes
+            UNION
+            SELECT user_id FROM admins
+        ) u
+        WHERE NOT EXISTS (
+            SELECT 1 FROM poll_messages pm 
+            WHERE pm.chat_id = u.user_id 
+            AND pm.poll_id = ?
+        )
+    `).all(pollId);
     let sent = 0, blocked = 0, errors = 0;
 
     // Async Background Process

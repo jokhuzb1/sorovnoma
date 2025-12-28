@@ -50,6 +50,12 @@ async function handleVote(bot, query, botUsername) {
     processingCache.add(throttleKey);
     setTimeout(() => processingCache.delete(throttleKey), throttleTime);
 
+    // Capture User Info if missing
+    try {
+        const { saveUser } = require('./messageHandler');
+        saveUser(from);
+    } catch (e) { }
+
     try {
         const pollId = parseInt(strPollId, 10);
         const optionId = parseInt(optionIdStr, 10);
