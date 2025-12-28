@@ -175,23 +175,48 @@ async function handleBroadcastPoll(bot, chatId, messageId, pollId, confirm = fal
 
     // Async Background Process
     (async () => {
-        for (const user of users) {
-            // Skip if user is loopback admin to avoid spam? No, admin should get it too usually to verify.
-            try {
-                const result = await sendPoll(bot, user.user_id, pollId);
-                if (result === true) sent++;
-                else if (result === null) blocked++;
-                else errors++;
-            } catch (e) {
-                errors++;
-            }
-            // Delay to avoid limits (approx 20 users/sec)
-            await new Promise(r => setTimeout(r, 50));
-        }
-
         try {
-            await bot.sendMessage(chatId, `✅ *Broadcast Tugatildi*\n(Poll #${pollId})\n\n👥 Jami urinish: ${users.length}\n✅ Muvaffaqiyatli: ${sent}\n⚠️ Xatoliklar: ${errors}`);
-        } catch (e) { }
+            for (let i = 0; i < users.length; i++) {
+                const user = users[i];
+                try {
+                    const result = await sendPoll(bot, user.user_id, pollId);
+                    if (result === true) sent++;
+                    else if (result === null) blocked++;
+                    else errors++;
+                } catch (e) {
+                    errors++;
+                }
+
+                // Progress Update (Every 25 users)
+                if (i % 25 === 0 && i > 0) {
+                    try {
+                        const percent = Math.round((i / users.length) * 100);
+                        await bot.editMessageText(`⏳ *Yuborilmoqda...* ${percent}%\n\n✅: ${sent} | 🚫: ${blocked} | ⚠️: ${errors}`, {
+                            chat_id: chatId,
+                            message_id: messageId,
+                            parse_mode: 'Markdown'
+                        });
+                    } catch (err) { /* ignore edit errors */ }
+                }
+
+                // Delay to avoid limits
+                await new Promise(r => setTimeout(r, 50));
+            }
+
+            try {
+                // Delete "Sending..." message to clean up, then send report
+                await bot.deleteMessage(chatId, messageId).catch(() => { });
+                await bot.sendMessage(chatId, `✅ *Broadcast Tugatildi*\n(Poll #${pollId})\n\n👥 Jami urinish: ${users.length}\n✅ Muvaffaqiyatli: ${sent}\n🚫 Bloklagan: ${blocked}\n⚠️ Xatoliklar: ${errors}
+                `, { parse_mode: 'Markdown' });
+            } catch (e) {
+                console.error('Final broadcast report error:', e);
+            }
+        } catch (fatalError) {
+            console.error('Broadcast Fatal Error:', fatalError);
+            try {
+                await bot.sendMessage(chatId, `❌ *Broadcast Xatolik Bilan Tugadi*\n\n${fatalError.message}`);
+            } catch (e) { }
+        }
     })();
 }
 
