@@ -4,7 +4,7 @@ module.exports = {
         ACTIVE_POLLS: '⚙️ Sorovnomalar (Aktiv)',
         ALL_POLLS: '📋 Sorovnomalar (Barchasi)',
         STATISTICS: '📊 Statistika',
-        HELP: 'ℹ️ Yordam',
+        HELP: '📞 Admin bilan bog\'lanish',
         SEND_NEWS: '📢 Yangilik Yuborish',
         ADMINS: '👤 Adminlar',
         CANCEL: '/cancel'

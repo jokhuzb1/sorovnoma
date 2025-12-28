@@ -170,7 +170,12 @@ async function sendPoll(bot, chatId, pollId, botUsername) {
         }
         return true;
     } catch (e) {
-        console.error('Error sending poll:', e.message);
+        const err = e.message || '';
+        if (err.includes('forbidden') || err.includes('blocked') || err.includes('chat not found') || err.includes('user is deactivated')) {
+            // Expected delivery failures - suppress log
+            return null;
+        }
+        console.error('Error sending poll:', err);
         return false;
     }
 }

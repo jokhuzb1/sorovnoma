@@ -165,21 +165,7 @@ async function handleMessage(bot, msg) {
     }
 
     if (text === MESSAGES.HELP) {
-        const isSuper = isSuperAdmin(userId);
-        let helpText = `📖 *Adminlar uchun Qo'llanma*\n\n`;
-        helpText += `➕ *Yangi So'rovnoma*: Yangi ovoz berish jarayonini yaratish.\n`;
-        helpText += `⚙️ *Aktiv So'rovnomalar*: Hozir ishlayotgan so'rovnomalarni boshqarish (To'xtatish, O'chirish).\n`;
-        helpText += `📋 *Barchasi*: Barcha eski va yangi so'rovnomalar ro'yxati.\n`;
-        helpText += `📊 *Statistika*: Bot foydalanuvchilari va ovozlar soni.\n`;
-
-        if (isSuper) {
-            helpText += `\n👤 *Adminlar*: Adminlarni boshqarish (faqat Super Admin).\n`;
-            helpText += `📢 *Yangilik Yuborish*: Barcha foydalanuvchilarga xabar tarqatish.\n`;
-        }
-
-        helpText += `\n❓ Savollar bo'lsa @admin ga yozing.`;
-
-        return bot.sendMessage(chatId, helpText, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
+        return bot.sendMessage(chatId, `👋 *Assalomu alaykum!*\n\nSavollar, takliflar yoki murojaat uchun adminga yozing:\n\n👤 @jahon1234`, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
     }
 
     if (text === MESSAGES.STATISTICS) {

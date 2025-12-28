@@ -53,6 +53,21 @@ async function handleAdminCallback(bot, query) {
             bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' }).catch(() => { });
             refreshManagementMessage(bot, message.chat.id, message.message_id, pollId);
         }
+        else if (action === 'broadcast_prompt') {
+            const pollId = parts[2];
+            bot.answerCallbackQuery(query.id).catch(() => { });
+            handleBroadcastPoll(bot, message.chat.id, message.message_id, pollId, false);
+        }
+        else if (action === 'broadcast_confirm') {
+            const pollId = parts[2];
+            bot.answerCallbackQuery(query.id, { text: 'Boshlanmoqda...' }).catch(() => { });
+            handleBroadcastPoll(bot, message.chat.id, message.message_id, pollId, true);
+        }
+        else if (action === 'broadcast_cancel') {
+            const pollId = parts[2];
+            bot.answerCallbackQuery(query.id, { text: 'Bekor qilindi' }).catch(() => { });
+            refreshManagementMessage(bot, message.chat.id, message.message_id, pollId);
+        }
     } catch (e) {
         console.error('Admin Handler Error:', e);
         bot.answerCallbackQuery(query.id, { text: 'Xatolik' }).catch(() => { });
@@ -97,6 +112,7 @@ async function refreshManagementMessage(bot, chatId, msgId, pollId, isNew = fals
             { text: '🛑 Toxtatish', callback_data: `admin:stop:${pollId}` }
         ],
         [{ text: '📤 Yuborish', callback_data: `send_poll:${pollId}` }],
+        [{ text: '📢 Broadcast (Barchaga)', callback_data: `admin:broadcast_prompt:${pollId}` }],
         [{ text: '🗑️ O\'chirish', callback_data: `admin:delete:${pollId}` }]
     ];
 
@@ -132,6 +148,53 @@ async function refreshManagementMessage(bot, chatId, msgId, pollId, isNew = fals
         }
     } catch (e) { }
 }
+
+async function handleBroadcastPoll(bot, chatId, messageId, pollId, confirm = false) {
+    if (!confirm) {
+        const buttons = [
+            [{ text: '✅ HA, Yuborilsin', callback_data: `admin:broadcast_confirm:${pollId}` }],
+            [{ text: '❌ Bekor qilish', callback_data: `admin:broadcast_cancel:${pollId}` }]
+        ];
+        return bot.editMessageText(`⚠️ *DIQQAT!*\n\nSiz #${pollId} raqamli so'rovnomani barcha foydalanuvchilarga yubormoqchisiz.\nBu jarayon biroz vaqt olishi mumkin.\n\nTasdiqlaysizmi?`, {
+            chat_id: chatId,
+            message_id: messageId,
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: buttons }
+        });
+    }
+
+    // Execution
+    await bot.editMessageText(`⏳ *Yuborilmoqda...*\n\nIltimos kuting, bu jarayon fonda davom etadi.`, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: 'Markdown'
+    });
+
+    const users = db.prepare('SELECT user_id FROM users').all();
+    let sent = 0, blocked = 0, errors = 0;
+
+    // Async Background Process
+    (async () => {
+        for (const user of users) {
+            // Skip if user is loopback admin to avoid spam? No, admin should get it too usually to verify.
+            try {
+                const result = await sendPoll(bot, user.user_id, pollId);
+                if (result === true) sent++;
+                else if (result === null) blocked++;
+                else errors++;
+            } catch (e) {
+                errors++;
+            }
+            // Delay to avoid limits (approx 20 users/sec)
+            await new Promise(r => setTimeout(r, 50));
+        }
+
+        try {
+            await bot.sendMessage(chatId, `✅ *Broadcast Tugatildi*\n(Poll #${pollId})\n\n👥 Jami urinish: ${users.length}\n✅ Muvaffaqiyatli: ${sent}\n⚠️ Xatoliklar: ${errors}`);
+        } catch (e) { }
+    })();
+}
+
 
 async function handleBroadcastCallback(bot, query) {
     const userId = query.from.id;
