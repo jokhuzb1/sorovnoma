@@ -144,7 +144,7 @@ async function handleMessage(bot, msg) {
         if (isAdmin(userId)) {
             return bot.sendMessage(chatId, welcomeText, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
         } else {
-            return bot.sendMessage(chatId, welcomeText, { parse_mode: 'Markdown', reply_markup: { remove_keyboard: true } });
+            return bot.sendMessage(chatId, welcomeText, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
         }
     }
 
@@ -165,7 +165,7 @@ async function handleMessage(bot, msg) {
     }
 
     if (text === MESSAGES.HELP) {
-        return bot.sendMessage(chatId, `👋 *Assalomu alaykum!*\n\nSavollar, takliflar yoki murojaat uchun adminga yozing:\n\n👤 @jahon1234`, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
+        return bot.sendMessage(chatId, `👋 *Assalomu alaykum!*\n\nSavollar, takliflar yoki murojaat uchun adminga yozing:\n\n👤 @sorovnomaadmin`, { parse_mode: 'Markdown', reply_markup: getMainMenu(userId) });
     }
 
     if (text === MESSAGES.STATISTICS) {
